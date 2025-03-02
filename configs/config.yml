@@ -1,0 +1,6 @@
+default:
+  header: "TEST"
+  version: "0.14.1"
+  # shiny serve option
+  shiny_host: "127.0.0.1"
+  shiny_port: 1337

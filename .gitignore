@@ -1,0 +1,8 @@
+/renv
+
+.Renviron
+.DS_Store
+.lintr
+
+*.sqlite
+*.tar
