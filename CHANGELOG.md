@@ -3,7 +3,7 @@
 ##### features
 - added checkboxes input form;
 - added button to reset data in forms;
-- added option to export input data to `.docx` format (using `rmarkdown`), using `reference.docx` template;
+- added option to export input data to `.docx` format (installed pandoc is required), using `reference.docx` template;
 - added new column in `main.xlsx` schema with `required` option: now you can set specifically which forms is required (1 - is required, NA - is not required) - this option now used in input validation (doesn't block saving data yet);
 - checking on load if schema changed (comparing to existing db): 
   - if new input form added in schema - adding it also on database (with empty values);
