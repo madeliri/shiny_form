@@ -25,6 +25,10 @@ DEBUG <- TRUE
 # TEMP ! NEED TO HANDLE
 rmarkdown::find_pandoc(dir = "/opt/homebrew/bin/")
 
+# CHECK FOR PANDOC
+# TODO: dynamic button render depend on pandoc installation
+if (!rmarkdown::pandoc_available()) warning("Can't find pandoc!")
+
 
 # SCHEME_MAIN UNPACK ==========================
 # load scheme
@@ -75,7 +79,7 @@ if (identical(colnames(DBI::dbReadTable(con, "main")), names(inputs_simple_list)
   form_base_difference <- setdiff(names(inputs_simple_list), colnames(df_to_rewrite))
   base_form_difference <- setdiff(colnames(df_to_rewrite), names(inputs_simple_list))
 
-  # if lenght are equal
+  # if lengths are equal
   if (length(names(inputs_simple_list)) == length(colnames(df_to_rewrite)) &&
         length(form_base_difference) == 0 &&
         length(base_form_difference) == 0) {
@@ -92,10 +96,12 @@ if (identical(colnames(DBI::dbReadTable(con, "main")), names(inputs_simple_list)
     warning("changes in scheme file detected: new inputs form was added")
     warning("trying to adapt database")
 
+    # add empty data for each new input form
     for (i in form_base_difference) {
       df_to_rewrite <- df_to_rewrite %>%
         mutate(!!sym(i) := get_empty_data(inputs_simple_list[i]))
     }
+    # reorder due to scheme
     df_to_rewrite <- df_to_rewrite %>%
       select(all_of(names(inputs_simple_list)))
 
@@ -343,7 +349,25 @@ nav_panels_list <- purrr::map(
   }
 )
 
-
+# UI =======================
+ui <- page_sidebar(
+  title = config$header,
+  theme = bs_theme(version = 5, preset = "bootstrap"),
+  sidebar = sidebar(
+    actionButton("save_data_button", "Сохранить данные", icon("floppy-disk", lib = "font-awesome")),
+    actionButton("clean_data_button", "Очистить данные", icon("user-plus", lib = "font-awesome")),
+    textOutput("status_message"),
+    textOutput("status_message2"),
+    actionButton("load_data_button", "Загрузить данные", icon("pencil", lib = "font-awesome")),
+    downloadButton("downloadData", "Экспорт в .xlsx"),
+    downloadButton("downloadDocx", "get .docx (test only)")
+  ),
+  # list of rendered panels
+  navset_card_underline(
+    !!!nav_panels_list,
+    header = NULL
+  )
+)
 
 # MODALS ========================
 # окно для подвтерждения очищения данных
@@ -380,32 +404,8 @@ modal_load_patients <- modalDialog(
   easyClose = TRUE
 )
 
-
-
-
-# UI =======================
-ui <- page_sidebar(
-  title = config$header,
-  theme = bs_theme(version = 5, preset = "bootstrap"),
-  sidebar = sidebar(
-    actionButton("save_data_button", "Сохранить данные", icon("floppy-disk", lib = "font-awesome")),
-    actionButton("clean_data_button", "Очистить данные", icon("user-plus", lib = "font-awesome")),
-    textOutput("status_message"),
-    textOutput("status_message2"),
-    actionButton("load_data_button", "Загрузить данные", icon("pencil", lib = "font-awesome")),
-    downloadButton("downloadData", "Экспорт в .xlsx"),
-    downloadButton("downloadDocx", "get .docx (test only)")
-  ),
-  # list of rendered panels
-  navset_card_underline(
-    !!!nav_panels_list,
-    header = NULL
-  )
-)
-
 # init auth =======================
 ui <- shinymanager::secure_app(ui, enable_admin = TRUE)
-
 
 # SERVER LOGIC =============================
 server <- function(input, output) {
@@ -430,7 +430,7 @@ server <- function(input, output) {
   rhand_tables <- reactiveValues()
 
   # VALIDATIONS ============================
-  # create new validataion
+  # create new validator
   iv <- shinyvalidate::InputValidator$new()
 
   # add rules to all inputs
