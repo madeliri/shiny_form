@@ -17,7 +17,7 @@
 - +number input validation
 
 ##### changes
-
+- redesign work with db (open connection only when action performed) (2024-03-03);
 - some code refactoring;
 - replacing NumberImput to TextInput due to correct implement validation;
 

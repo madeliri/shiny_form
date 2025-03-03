@@ -20,7 +20,7 @@ config <- config::get(file = "configs/config.yml")
 folder_with_schemas <- fs::path("configs/schemas")
 FILE_SCHEME         <- fs::path(folder_with_schemas, "main.xlsx")
 dbfile              <- fs::path("data.sqlite")
-DEBUG <- TRUE
+DEBUG <- FALSE
 
 # TEMP ! NEED TO HANDLE
 rmarkdown::find_pandoc(dir = "/opt/homebrew/bin/")
@@ -53,16 +53,30 @@ inputs_tables_list <- SCHEME_MAIN %>%
 
 
 # SETUP DB ==========================
-con <- DBI::dbConnect(
-  drv = RSQLite::SQLite(),
-  dbname = dbfile,
-)
+#' @description Function to open connection to db, disigned to easy dubugging.
+make_db_connection <- function(where = "") {
+  if (DEBUG) message("=== DB CONNECT ", where)
+  DBI::dbConnect(RSQLite::SQLite(), dbfile)
+}
 
-# Init DB (write dummy data to "main" table)
+#' @description Function to close connection to db, disigned to easy dubugging and
+#' hide warnings.
+close_db_connection <- function(where = "") {
+  tryCatch(
+    expr = DBI::dbDisconnect(con),
+    error = function(e) print(e),
+    warning = function(w) if (DEBUG) message("=!= ALREADY DISCONNECTED ", where),
+    finally = if (DEBUG) message("=/= DB DISCONNECT ", where)
+  )
+}
+
+# establish connection
+con <- make_db_connection()
+
+# init DB (write dummy data to "main" table)
 if (!"main" %in% dbListTables(con)) {
 
-  dummy_df <- get_dummy_df() %>%
-    mutate(id = "dummy")
+  dummy_df <- mutate(get_dummy_df(), id = "dummy")
 
   # write dummy df into base, then delete dummy row
   DBI::dbWriteTable(con, "main", dummy_df, append = TRUE)
@@ -83,7 +97,7 @@ if (identical(colnames(DBI::dbReadTable(con, "main")), names(inputs_simple_list)
   if (length(names(inputs_simple_list)) == length(colnames(df_to_rewrite)) &&
         length(form_base_difference) == 0 &&
         length(base_form_difference) == 0) {
-    warning("changes in scheme file detected: pressuming here simply changed order")
+    warning("changes in scheme file detected: assuming order changed only")
   }
 
   if (length(names(inputs_simple_list)) == length(colnames(df_to_rewrite)) &&
@@ -101,6 +115,7 @@ if (identical(colnames(DBI::dbReadTable(con, "main")), names(inputs_simple_list)
       df_to_rewrite <- df_to_rewrite %>%
         mutate(!!sym(i) := get_empty_data(inputs_simple_list[i]))
     }
+
     # reorder due to scheme
     df_to_rewrite <- df_to_rewrite %>%
       select(all_of(names(inputs_simple_list)))
@@ -112,37 +127,18 @@ if (identical(colnames(DBI::dbReadTable(con, "main")), names(inputs_simple_list)
   if (length(names(inputs_simple_list)) < length(colnames(df_to_rewrite))) {
     stop("changes in scheme file detected: some of inputs form was deleted! it may cause data loss!")
   }
-
+  # cleaning
   rm(df_to_rewrite, form_base_difference)
 
 }
 
-
-# write dummies (for test purposes)
-# purrr::map(
-#   .x = 1:300,
-#   .f = \(x) {
-#     dummy_df <- purrr::map2(
-#       .x = purrr::set_names(names(inputs_simple_list)),
-#       .y = inputs_simple_list,
-#       .f = \(x_id, y_type) {
-#         if (y_type %in% c("text", "select_one", "select_multiple")) return("dummy")
-#         if (y_type %in% c("radio")) return("dummy")
-#         if (y_type %in% c("date")) return(as.Date("1990-01-01"))
-#         if (y_type %in% c("number")) return(as.double(999))
-#       }
-#     ) %>%
-#       as_tibble() %>%
-#       mutate(id = glue::glue("test{x}"))
-#     dbWriteTable(con, "main", dummy_df, append = TRUE)
-#     dbExecute(con, "DELETE FROM main WHERE id = 'dummy'")
-#   }
-# )
+# close connection to prevent data loss
+close_db_connection()
 
 
 # INLINE TABLES =====================
 # создаем для каждой таблицы объект
-inline_tables <- map(
+inline_tables <- purrr::map(
   .x = purrr::set_names(inputs_tables_list),
   .f = \(x_inline_table_name) {
 
@@ -181,19 +177,9 @@ create_forms <- function(form_id, form_label, form_type) {
   condition <- filter(SCHEME_MAIN, form_id == {{form_id}}) %>% distinct(condition) %>% pull
   choices   <- filter(SCHEME_MAIN, form_id == {{form_id}}) %>% pull(choices)
 
-  # simple text input
-  if (form_type == "text") {
+  # simple text or number input
+  if (form_type %in% c("text", "number")) {
     form <- shiny::textAreaInput(
-      inputId = form_id,
-      label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
-      rows = 1
-    )
-  }
-
-  # simple number input
-  if (form_type == "number") {
-
-    form <- textAreaInput(
       inputId = form_id,
       label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
       rows = 1
@@ -223,7 +209,6 @@ create_forms <- function(form_id, form_label, form_type) {
       choices = choices,
       selected = NULL,
       options = list(
-        # placeholder = "выберите из списка...",
         create = FALSE,
         onInitialize = I('function() { this.setValue(""); }')
       )
@@ -239,7 +224,6 @@ create_forms <- function(form_id, form_label, form_type) {
       selected = NULL,
       multiple = TRUE,
       options = list(
-        # placeholder = "множественный выбор",
         create = FALSE,
         onInitialize = I('function() { this.setValue(""); }')
       )
@@ -271,7 +255,7 @@ create_forms <- function(form_id, form_label, form_type) {
     form <- rHandsontableOutput(outputId = form_id)
   }
 
-  # вложенная таблица
+  # description part
   if (form_type == "description") {
     form <- div(HTML(form_label), style = "color:Gray;font-size: 90%;")
   }
@@ -311,8 +295,6 @@ make_cards_fn <- function(sub_group) {
 
 # get pages list
 pages_list <- unique(SCHEME_MAIN$part)
-
-# TODO: replace with unique(SCHEME_MAIN$part)
 
 # get all forms df
 df_forms <- SCHEME_MAIN %>%
@@ -383,7 +365,7 @@ modal_clean_all <- modalDialog(
 
 # окно для подвтерждения удаления
 modal_overwrite <- modalDialog(
-  "Запись с данным id уже существует в базе",
+  "Запись с данным id уже существует в базе. Это действие перезапишет сохраненные ранее данные.",
   title = "Перезаписать данные?",
   footer = tagList(
     actionButton("cancel_button", "Отмена"),
@@ -394,7 +376,7 @@ modal_overwrite <- modalDialog(
 
 # окно для подвтерждения удаления
 modal_load_patients <- modalDialog(
-  "Загрузить данные пациента",
+  "Загрузить данные",
   uiOutput("load_menu"),
   title = "Загрузить имеющиеся данные",
   footer = tagList(
@@ -499,7 +481,6 @@ server <- function(input, output) {
     iv$is_valid()
     # res_auth$admin
   })
-
 
   # CREATE RHANDSOME TABLES =====================
   # записать массив пустых табличек в rhands_tables
@@ -617,6 +598,8 @@ server <- function(input, output) {
   # сохранить простые данные;
   observeEvent(input$save_data_button, {
     req(input$id)
+    con <- make_db_connection("save_data_button")
+    on.exit(close_db_connection("save_data_button"), add = TRUE)
 
     ## MAIN
     # собрать все значения по введенным данным;
@@ -639,10 +622,10 @@ server <- function(input, output) {
     values$data <- setNames(result_df, names(inputs_simple_list)) %>%
       as_tibble()
 
-    if (length(dbListTables(con)) == 0) {
+    if (length(DBI::dbListTables(con)) == 0) {
       # если база пустая, то просто записываем данные
       write_all_to_db()
-    } else if ("main" %in% dbListTables(con)) {
+    } else if ("main" %in% DBI::dbListTables(con)) {
       # если главная таблица существует, то проверяем существование id
 
       # GET DATA files
@@ -653,7 +636,7 @@ server <- function(input, output) {
         ", .con = con)
 
       # получаем список записей с данным id
-      exist_main_df <- dbGetQuery(con, query)
+      exist_main_df <- DBI::dbGetQuery(con, query)
 
       # проверка по наличию записей с данным ID в базе;
       if (nrow(exist_main_df) == 0) {
@@ -667,13 +650,14 @@ server <- function(input, output) {
     }
   })
 
-
   ## get list of id's from db =====================
   observeEvent(input$load_data_button, {
+    con <- make_db_connection("load_data_button")
+    on.exit(close_db_connection("load_data_button"))
 
-    if (length(dbListTables(con)) != 0 && "main" %in% dbListTables(con)) {
+    if (length(dbListTables(con)) != 0 && "main" %in% DBI::dbListTables(con)) {
       # GET DATA files
-      ids <- dbGetQuery(con, "SELECT DISTINCT id FROM main") %>%
+      ids <- DBI::dbGetQuery(con, "SELECT DISTINCT id FROM main") %>%
         pull
 
       output$load_menu <- renderUI({
@@ -699,6 +683,8 @@ server <- function(input, output) {
 
   ## load data to input forms ==================================
   observeEvent(input$read_data, {
+    con <- make_db_connection("read_data")
+    on.exit(close_db_connection("read_data"), add = TRUE)
 
     # main df read
     test_read_df <- read_df_from_db_by_id("main", con)
@@ -752,6 +738,9 @@ server <- function(input, output) {
   output$downloadData <- downloadHandler(
     filename = paste0("d2tra_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".xlsx"),
     content = function(file) {
+      con <- make_db_connection("downloadData")
+      on.exit(close_db_connection("downloadData"), add = TRUE)
+
       # get all data
       list_of_df <- purrr::map(
         .x = purrr::set_names(c("main", inputs_tables_list)),
@@ -885,6 +874,9 @@ server <- function(input, output) {
 
   ## trigger saving function =============
   observeEvent(input$data_save, {
+    con <- make_db_connection("saving data (from modal conf)")
+    on.exit(close_db_connection("saving data (from modal conf)"), add = TRUE)
+
     # убираем плашку
     removeModal()
 
@@ -902,6 +894,8 @@ server <- function(input, output) {
   # FUNCTIONS ==============================
   ## write all inputs to db ================
   write_all_to_db <- function() {
+    con <- make_db_connection("fn call `write_all_to_db()`")
+    # on.exit(close_db_connection("fn call `write_all_to_db()`"), add = TRUE)
 
     # write main
     write_df_to_db(values$data, "main", con)
@@ -949,6 +943,7 @@ server <- function(input, output) {
 
   ## helper function writing dbs ========
   write_df_to_db <- function(df, table_name, con) {
+    # disconnecting on parent function
 
     # delete exists data for this id
     if (table_name %in% dbListTables(con)) {
@@ -962,6 +957,9 @@ server <- function(input, output) {
 
   ## reading tables from db by name and id ========
   read_df_from_db_by_id <- function(table_name, con) {
+    # DBI::dbConnect(RSQLite::SQLite(), dbfile)
+    # on.exit(DBI::dbDisconnect(con), add = TRUE)
+
     # check if this table exist
     if (table_name %in% dbListTables(con)) {
       # prepare query
@@ -977,6 +975,9 @@ server <- function(input, output) {
 
   ## reading tables from db all ========
   read_df_from_db_all <- function(table_name, con) {
+    # DBI::dbConnect(RSQLite::SQLite(), dbfile)
+    # on.exit(DBI::dbDisconnect(con), add = TRUE)
+
     # check if this table exist
     if (table_name %in% dbListTables(con)) {
       # prepare query
@@ -991,6 +992,9 @@ server <- function(input, output) {
 
   ## LOGGING ACTIONS
   log_action_to_db <- function(action, pat_id = as.character(NA), con) {
+    # DBI::dbConnect(RSQLite::SQLite(), dbfile)
+    # on.exit(DBI::dbDisconnect(con), add = TRUE)
+
     action_row <- tibble(
       user = res_auth$user,
       action = action,
