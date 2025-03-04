@@ -3,6 +3,7 @@
 .Renviron
 .DS_Store
 .lintr
+.Rprofile
 
 *.sqlite
 *.tar
