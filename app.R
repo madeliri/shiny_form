@@ -18,9 +18,12 @@ source("helpers/functions.R")
 config <- config::get(file = "configs/config.yml")
 
 folder_with_schemas <- fs::path("configs/schemas")
-FILE_SCHEME         <- fs::path(folder_with_schemas, "main.xlsx")
-dbfile              <- fs::path("data.sqlite")
+FILE_SCHEME <- fs::path(folder_with_schemas, "main.xlsx")
+dbfile <- fs::path("data.sqlite")
+
+# SETTINGS ================================
 DEBUG <- FALSE
+AUTH_ENABLED <- config$auth_module
 
 # TEMP ! NEED TO HANDLE
 rmarkdown::find_pandoc(dir = "/opt/homebrew/bin/")
@@ -28,7 +31,6 @@ rmarkdown::find_pandoc(dir = "/opt/homebrew/bin/")
 # CHECK FOR PANDOC
 # TODO: dynamic button render depend on pandoc installation
 if (!rmarkdown::pandoc_available()) warning("Can't find pandoc!")
-
 
 # SCHEME_MAIN UNPACK ==========================
 # load scheme
@@ -43,13 +45,13 @@ SCHEME_MAIN <- readxl::read_xlsx(FILE_SCHEME) %>%
 inputs_simple_list <- SCHEME_MAIN %>%
   filter(!form_type %in% c("inline_table", "description")) %>%
   distinct(form_id, form_type) %>%
-  deframe
+  deframe()
 
 # get list of inputs with inline tables
 inputs_tables_list <- SCHEME_MAIN %>%
   filter(form_type == "inline_table") %>%
   distinct(form_id) %>%
-  deframe
+  deframe()
 
 
 # SETUP DB ==========================
@@ -75,7 +77,6 @@ con <- make_db_connection()
 
 # init DB (write dummy data to "main" table)
 if (!"main" %in% dbListTables(con)) {
-
   dummy_df <- mutate(get_dummy_df(), id = "dummy")
 
   # write dummy df into base, then delete dummy row
@@ -95,14 +96,14 @@ if (identical(colnames(DBI::dbReadTable(con, "main")), names(inputs_simple_list)
 
   # if lengths are equal
   if (length(names(inputs_simple_list)) == length(colnames(df_to_rewrite)) &&
-        length(form_base_difference) == 0 &&
-        length(base_form_difference) == 0) {
+    length(form_base_difference) == 0 &&
+    length(base_form_difference) == 0) {
     warning("changes in scheme file detected: assuming order changed only")
   }
 
   if (length(names(inputs_simple_list)) == length(colnames(df_to_rewrite)) &&
-        length(form_base_difference) != 0 &&
-        length(base_form_difference) != 0) {
+    length(form_base_difference) != 0 &&
+    length(base_form_difference) != 0) {
     stop("changes in scheme file detected: structure has been changed")
   }
 
@@ -129,7 +130,6 @@ if (identical(colnames(DBI::dbReadTable(con, "main")), names(inputs_simple_list)
   }
   # cleaning
   rm(df_to_rewrite, form_base_difference)
-
 }
 
 # close connection to prevent data loss
@@ -141,7 +141,6 @@ close_db_connection()
 inline_tables <- purrr::map(
   .x = purrr::set_names(inputs_tables_list),
   .f = \(x_inline_table_name) {
-
     # получить имя файла со схемой
     file_name <- SCHEME_MAIN %>%
       filter(form_id == x_inline_table_name) %>%
@@ -154,7 +153,7 @@ inline_tables <- purrr::map(
     # список форм в схеме
     inline_forms <- schemaaa %>%
       distinct(form_id) %>%
-      pull
+      pull()
 
     # макет таблицы (пустой)
     DF_gen <- as.list(setNames(rep(as.character(NA), length(inline_forms)), inline_forms)) |>
@@ -168,14 +167,14 @@ inline_tables <- purrr::map(
   }
 )
 
-
 # создание объектов для ввода
 # функция
 create_forms <- function(form_id, form_label, form_type) {
-
   # check if have condition
-  condition <- filter(SCHEME_MAIN, form_id == {{form_id}}) %>% distinct(condition) %>% pull
-  choices   <- filter(SCHEME_MAIN, form_id == {{form_id}}) %>% pull(choices)
+  condition <- filter(SCHEME_MAIN, form_id == {{ form_id }}) %>%
+    distinct(condition) %>%
+    pull()
+  choices <- filter(SCHEME_MAIN, form_id == {{ form_id }}) %>% pull(choices)
 
   # simple text or number input
   if (form_type %in% c("text", "number")) {
@@ -271,21 +270,18 @@ create_forms <- function(form_id, form_label, form_type) {
   form
 }
 
-
-
 # GENERATE UI ==================================
 # functions for making cards
 make_cards_fn <- function(sub_group) {
-
   subgroups_inputs <- df_forms %>%
-    filter(subgroup == {{sub_group}}) %>%
-    distinct(form_id, form_label, form_type)
+    dplyr::filter(subgroup == {{ sub_group }}) %>%
+    dplyr::distinct(form_id, form_label, form_type)
 
-  card(
-    card_header(sub_group, container = htmltools::h5),
+  bslib::card(
+    bslib::card_header(sub_group, container = htmltools::h5),
     full_screen = TRUE,
     width = "4000px",
-    card_body(
+    bslib::card_body(
       fill = TRUE,
       # передаем все аргументы в функцию для создания елементов
       purrr::pmap(subgroups_inputs, create_forms)
@@ -298,17 +294,16 @@ pages_list <- unique(SCHEME_MAIN$part)
 
 # get all forms df
 df_forms <- SCHEME_MAIN %>%
-  distinct(part, subgroup, form_id, form_label, form_type)
+  dplyr::distinct(part, subgroup, form_id, form_label, form_type)
 
 # generate nav panels
 nav_panels_list <- purrr::map(
   .x = pages_list,
   .f = \(x_page) {
-
     # get info about inputs for current page
     page_forms <- SCHEME_MAIN %>%
-      filter(part == {{x_page}}) %>%
-      distinct(subgroup, form_id, form_label, form_type)
+      dplyr::filter(part == {{ x_page }}) %>%
+      dplyr::distinct(subgroup, form_id, form_label, form_type)
 
     # get list of columns
     cols_list <- unique(page_forms$subgroup)
@@ -320,14 +315,15 @@ nav_panels_list <- purrr::map(
     )
 
     # make page wrap
-    page_wrap <- layout_column_wrap(
-      width = "350px", height = NULL, #was 800
+    page_wrap <- bslib::layout_column_wrap(
+      # width = "350px", height = NULL, #was 800
+      width = 1 / 4, height = NULL, # was 800
       fixed_width = TRUE,
       !!!cards # unpack list of cards
     )
 
     # add panel wrap to nav_panel
-    nav_panel(x_page, page_wrap)
+    bslib::nav_panel(x_page, page_wrap)
   }
 )
 
@@ -387,20 +383,21 @@ modal_load_patients <- modalDialog(
 )
 
 # init auth =======================
-ui <- shinymanager::secure_app(ui, enable_admin = TRUE)
+if (AUTH_ENABLED) ui <- shinymanager::secure_app(ui, enable_admin = TRUE)
 
 # SERVER LOGIC =============================
 server <- function(input, output) {
-
   # AUTH SETUP ========================================
-  # check_credentials directly on sqlite db
-  res_auth <- shinymanager::secure_server(
-    check_credentials = check_credentials(
-      db = "auth.sqlite",
-      passphrase = Sys.getenv("AUTH_DB_KEY")
-    ),
-    keep_token = TRUE
-  )
+  if (AUTH_ENABLED) {
+    # check_credentials directly on sqlite db
+    res_auth <- shinymanager::secure_server(
+      check_credentials = check_credentials(
+        db = "auth.sqlite",
+        passphrase = Sys.getenv("AUTH_DB_KEY")
+      ),
+      keep_token = TRUE
+    )
+  }
 
   output$auth_output <- renderPrint({
     reactiveValuesToList(res_auth)
@@ -408,7 +405,7 @@ server <- function(input, output) {
 
   # REACTIVE VALUES =================================
   # Create a reactive values object to store the input data
-  values       <- reactiveValues(data = NULL)
+  values <- reactiveValues(data = NULL)
   rhand_tables <- reactiveValues()
 
   # VALIDATIONS ============================
@@ -419,17 +416,20 @@ server <- function(input, output) {
   purrr::walk(
     .x = names(inputs_simple_list),
     .f = \(x_input_id) {
-
-      form_type    <- inputs_simple_list[[x_input_id]]
-      choices      <- filter(SCHEME_MAIN, form_id == {{x_input_id}}) %>% pull(choices)
-      val_required <- filter(SCHEME_MAIN, form_id == {{x_input_id}}) %>% distinct(required) %>% pull(required)
+      form_type <- inputs_simple_list[[x_input_id]]
+      choices <- filter(SCHEME_MAIN, form_id == {{ x_input_id }}) %>% pull(choices)
+      val_required <- filter(SCHEME_MAIN, form_id == {{ x_input_id }}) %>%
+        distinct(required) %>%
+        pull(required)
 
       # for `number` type: if in `choices` column has values then parsing them to range validation
       # value `0; 250` -> transform to rule validation value from 0 to 250
       if (form_type == "number") {
         iv$add_rule(x_input_id, function(x) {
           # exit if empty
-          if (check_for_empty_data(x)) return(NULL)
+          if (check_for_empty_data(x)) {
+            return(NULL)
+          }
           # check for numeric
           if (grepl("^[-]?(\\d*\\,\\d+|\\d+\\,\\d*|\\d+)$", x)) NULL else "Значение должно быть числом."
         })
@@ -446,7 +446,9 @@ server <- function(input, output) {
               x_input_id,
               function(x) {
                 # exit if empty
-                if (check_for_empty_data(x)) return(NULL)
+                if (check_for_empty_data(x)) {
+                  return(NULL)
+                }
                 # check for currect value
                 if (between(as.integer(x), ranges[1], ranges[2])) {
                   NULL
@@ -497,7 +499,6 @@ server <- function(input, output) {
     purrr::walk(
       .x = inputs_tables_list,
       .f = \(x) {
-
         # вытаскиваем схемы из заготовленного ранее списка
         schema <- inline_tables[[x]]$schema
 
@@ -522,7 +523,6 @@ server <- function(input, output) {
 
         # циклом итерируемся по индексу;
         for (i in seq(1, length(schema_comp$form_id))) {
-
           # получаем информацию о типе столбца
           type <- filter(schema_comp, form_id == schema_comp$form_id[i]) %>% pull(form_type)
 
@@ -566,13 +566,11 @@ server <- function(input, output) {
 
   # when action confirm - perform action
   observeEvent(input$clean_all_action, {
-
     # rewrite all inputs with empty data
     purrr::walk2(
       .x = inputs_simple_list,
       .y = names(inputs_simple_list),
       .f = \(x_type, x_id) {
-
         # using function to update forms
         update_forms_with_data(
           id = x_id,
@@ -606,13 +604,17 @@ server <- function(input, output) {
     result_df <- purrr::map(
       .x = names(inputs_simple_list),
       .f = \(x) {
-        type    <- inputs_simple_list[[x]]
+        type <- inputs_simple_list[[x]]
         input_d <- input[[x]]
 
         # return empty if 0 element
-        if (length(input_d) == 0) return(get_empty_data(type))
+        if (length(input_d) == 0) {
+          return(get_empty_data(type))
+        }
         # return element if there one
-        if (length(input_d) == 1) return(input_d)
+        if (length(input_d) == 1) {
+          return(input_d)
+        }
         # если елементов больше одного - объединять через ";"
         if (length(input_d) > 1) paste(input_d, collapse = "; ")
       }
@@ -630,7 +632,7 @@ server <- function(input, output) {
 
       # GET DATA files
       query <- glue::glue_sql("
-        SELECT DISTINCT id 
+        SELECT DISTINCT id
         FROM main
         WHERE id = {input$id}
         ", .con = con)
@@ -658,7 +660,7 @@ server <- function(input, output) {
     if (length(dbListTables(con)) != 0 && "main" %in% DBI::dbListTables(con)) {
       # GET DATA files
       ids <- DBI::dbGetQuery(con, "SELECT DISTINCT id FROM main") %>%
-        pull
+        pull()
 
       output$load_menu <- renderUI({
         selectizeInput(
@@ -697,7 +699,6 @@ server <- function(input, output) {
       .x = inputs_simple_list,
       .y = names(inputs_simple_list),
       .f = \(x_type, x_id) {
-
         if (DEBUG) {
           values_load <- test_read_df[[x_id]]
           print(paste(x_type, x_id, values_load, sep = " || "))
@@ -731,7 +732,6 @@ server <- function(input, output) {
     showNotification("Данные загружены!", type = "warning")
     message("load data")
     log_action_to_db("load", input$read_id_selector, con = con)
-
   })
 
   ## export to .xlsx ====
@@ -780,7 +780,6 @@ server <- function(input, output) {
       paste0(input$id, "_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".docx")
     },
     content = function(file) {
-
       # prepare YAML sections
       empty_vec <- c(
         "---",
@@ -795,7 +794,6 @@ server <- function(input, output) {
       purrr::walk(
         .x = unique(SCHEME_MAIN$part),
         .f = \(x_iter1) {
-
           # write level 1 header
           HEADER_1 <- paste("#", x_iter1, "\n")
           empty_vec <<- c(empty_vec, HEADER_1)
@@ -804,7 +802,6 @@ server <- function(input, output) {
           purrr::walk(
             .x = pull(unique(subset(SCHEME_MAIN, part == x_iter1, "subgroup"))),
             .f = \(x_iter2) {
-
               # get header 2 name
               HEADER_2 <- paste("##", x_iter2, "\n")
 
@@ -820,8 +817,7 @@ server <- function(input, output) {
               VALUES <- purrr::map_chr(
                 .x = litle_scheme$form_id,
                 .f = \(x_id) {
-
-                  docx_type  <- subset(litle_scheme, form_id == x_id, "form_type")
+                  docx_type <- subset(litle_scheme, form_id == x_id, "form_type")
                   docx_label <- subset(litle_scheme, form_id == x_id, "form_label")
 
                   # logic for render documemts
@@ -833,7 +829,6 @@ server <- function(input, output) {
 
                     # if non empty data - add string
                     if (!check_for_empty_data(docx_value)) paste0("**", docx_label, "**: ", docx_value, "\n") else NA
-
                   } else if (docx_type == "description") {
                     # treat description label as citation text
                     paste0(">", docx_label, "\n")
@@ -850,8 +845,8 @@ server <- function(input, output) {
       )
 
       # set temp folder and names
-      temp_folder   <- tempdir()
-      temp_report   <- file.path(temp_folder, "rmarkdown_output.Rmd")
+      temp_folder <- tempdir()
+      temp_report <- file.path(temp_folder, "rmarkdown_output.Rmd")
       temp_template <- file.path(temp_folder, "reference.docx")
 
       # clean from NA strings
@@ -902,7 +897,6 @@ server <- function(input, output) {
 
     # write inline tables
     for (i in inputs_tables_list) {
-
       df <- tryCatch(
         # проверка выражения
         expr = {
@@ -947,7 +941,6 @@ server <- function(input, output) {
 
     # delete exists data for this id
     if (table_name %in% dbListTables(con)) {
-
       del_query <- glue::glue("DELETE FROM {table_name} WHERE id = '{input$id}'")
       DBI::dbExecute(con, del_query)
     }
@@ -996,14 +989,13 @@ server <- function(input, output) {
     # on.exit(DBI::dbDisconnect(con), add = TRUE)
 
     action_row <- tibble(
-      user = res_auth$user,
+      user = ifelse(AUTH_ENABLED, res_auth$user, "anonymous"),
       action = action,
       id = pat_id,
       date = Sys.time()
     )
     DBI::dbWriteTable(con, "log", action_row, append = TRUE)
   }
-
 }
 
 options(shiny.port = config$shiny_port)

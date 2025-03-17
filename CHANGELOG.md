@@ -20,6 +20,7 @@
 - redesign work with db (open connection only when action performed) (2024-03-03);
 - some code refactoring;
 - replacing NumberImput to TextInput due to correct implement validation;
+- added options to enable/disable auth module (disabled on default) (2025-03-17);
 
 
 

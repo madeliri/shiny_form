@@ -4,3 +4,4 @@ default:
   # shiny serve option
   shiny_host: "127.0.0.1"
   shiny_port: 1337
+  auth_module: FALSE # default: FALSE
