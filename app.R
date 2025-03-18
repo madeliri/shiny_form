@@ -63,7 +63,7 @@ make_db_connection <- function(where = "") {
 
 #' @description Function to close connection to db, disigned to easy dubugging and
 #' hide warnings.
-close_db_connection <- function(where = "") {
+close_db_connection <- function(con, where = "") {
   tryCatch(
     expr = DBI::dbDisconnect(con),
     error = function(e) print(e),
@@ -133,7 +133,7 @@ if (identical(colnames(DBI::dbReadTable(con, "main")), names(inputs_simple_list)
 }
 
 # close connection to prevent data loss
-close_db_connection()
+close_db_connection(con)
 
 
 # INLINE TABLES =====================
@@ -417,8 +417,8 @@ server <- function(input, output) {
     .x = names(inputs_simple_list),
     .f = \(x_input_id) {
       form_type <- inputs_simple_list[[x_input_id]]
-      choices <- filter(SCHEME_MAIN, form_id == {{x_input_id}}) %>% pull(choices)
-      val_required <- filter(SCHEME_MAIN, form_id == {{x_input_id}}) %>%
+      choices <- filter(SCHEME_MAIN, form_id == {{ x_input_id }}) %>% pull(choices)
+      val_required <- filter(SCHEME_MAIN, form_id == {{ x_input_id }}) %>%
         distinct(required) %>%
         pull(required)
 
@@ -597,19 +597,18 @@ server <- function(input, output) {
   observeEvent(input$save_data_button, {
     req(input$id)
     con <- make_db_connection("save_data_button")
-    on.exit(close_db_connection("save_data_button"), add = TRUE)
+    on.exit(close_db_connection(con, "save_data_button"), add = TRUE)
 
     ## MAIN
     # собрать все значения по введенным данным;
     result_df <- purrr::map(
       .x = names(inputs_simple_list),
       .f = \(x) {
-        type <- inputs_simple_list[[x]]
         input_d <- input[[x]]
 
         # return empty if 0 element
         if (length(input_d) == 0) {
-          return(get_empty_data(type))
+          return(get_empty_data(inputs_simple_list[[x]]))
         }
         # return element if there one
         if (length(input_d) == 1) {
@@ -655,7 +654,7 @@ server <- function(input, output) {
   ## get list of id's from db =====================
   observeEvent(input$load_data_button, {
     con <- make_db_connection("load_data_button")
-    on.exit(close_db_connection("load_data_button"))
+    on.exit(close_db_connection(con, "load_data_button"))
 
     if (length(dbListTables(con)) != 0 && "main" %in% DBI::dbListTables(con)) {
       # GET DATA files
@@ -686,7 +685,7 @@ server <- function(input, output) {
   ## load data to input forms ==================================
   observeEvent(input$read_data, {
     con <- make_db_connection("read_data")
-    on.exit(close_db_connection("read_data"), add = TRUE)
+    on.exit(close_db_connection(con, "read_data"), add = TRUE)
 
     # main df read
     test_read_df <- read_df_from_db_by_id("main", con)
@@ -739,7 +738,7 @@ server <- function(input, output) {
     filename = paste0("d2tra_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".xlsx"),
     content = function(file) {
       con <- make_db_connection("downloadData")
-      on.exit(close_db_connection("downloadData"), add = TRUE)
+      on.exit(close_db_connection(con, "downloadData"), add = TRUE)
 
       # get all data
       list_of_df <- purrr::map(
@@ -870,7 +869,7 @@ server <- function(input, output) {
   ## trigger saving function =============
   observeEvent(input$data_save, {
     con <- make_db_connection("saving data (from modal conf)")
-    on.exit(close_db_connection("saving data (from modal conf)"), add = TRUE)
+    on.exit(close_db_connection(con, "saving data (from modal conf)"), add = TRUE)
 
     # убираем плашку
     removeModal()

@@ -16,9 +16,10 @@
 - fixed not erasing inputs while loading empty values (with checkboxes, radiobuttons);
 - +number input validation
 - fix validation errors (2025-03-18);
+- fixes to db work: properly closing connection (2025-03-18);
 
 ##### changes
-- redesign work with db (open connection only when action performed) (2024-03-03);
+- redesign work with db (open connection only when action performed) (2025-03-03);
 - some code refactoring;
 - replacing NumberImput to TextInput due to correct implement validation;
 - added options to enable/disable auth module (disabled on default) (2025-03-17);
