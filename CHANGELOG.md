@@ -15,6 +15,7 @@
 
 - fixed not erasing inputs while loading empty values (with checkboxes, radiobuttons);
 - +number input validation
+- fix validation errors (2025-03-18);
 
 ##### changes
 - redesign work with db (open connection only when action performed) (2024-03-03);

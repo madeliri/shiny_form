@@ -38,7 +38,7 @@ SCHEME_MAIN <- readxl::read_xlsx(FILE_SCHEME) %>%
   # fill NA down
   fill(c(part, subgroup, form_id, form_label, form_type), .direction = "down") %>%
   group_by(form_id) %>%
-  fill(condition, .direction = "down") %>%
+  fill(c(condition, required), .direction = "down") %>%
   ungroup()
 
 # get list of simple inputs
@@ -417,8 +417,8 @@ server <- function(input, output) {
     .x = names(inputs_simple_list),
     .f = \(x_input_id) {
       form_type <- inputs_simple_list[[x_input_id]]
-      choices <- filter(SCHEME_MAIN, form_id == {{ x_input_id }}) %>% pull(choices)
-      val_required <- filter(SCHEME_MAIN, form_id == {{ x_input_id }}) %>%
+      choices <- filter(SCHEME_MAIN, form_id == {{x_input_id}}) %>% pull(choices)
+      val_required <- filter(SCHEME_MAIN, form_id == {{x_input_id}}) %>%
         distinct(required) %>%
         pull(required)
 
