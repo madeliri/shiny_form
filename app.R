@@ -18,17 +18,17 @@ source("helpers/functions.R")
 config <- config::get(file = "configs/config.yml")
 
 folder_with_schemas <- fs::path("configs/schemas")
-FILE_SCHEME <- fs::path(folder_with_schemas, "main.xlsx")
-dbfile <- fs::path("data.sqlite")
+FILE_SCHEME         <- fs::path(folder_with_schemas, "main.xlsx")
+dbfile              <- fs::path("data.sqlite")
 
 # SETTINGS ================================
 DEBUG <- FALSE
 AUTH_ENABLED <- config$auth_module
 
+# CHECK FOR PANDOC
 # TEMP ! NEED TO HANDLE
 rmarkdown::find_pandoc(dir = "/opt/homebrew/bin/")
 
-# CHECK FOR PANDOC
 # TODO: dynamic button render depend on pandoc installation
 if (!rmarkdown::pandoc_available()) warning("Can't find pandoc!")
 
@@ -36,22 +36,22 @@ if (!rmarkdown::pandoc_available()) warning("Can't find pandoc!")
 # load scheme
 SCHEME_MAIN <- readxl::read_xlsx(FILE_SCHEME) %>%
   # fill NA down
-  fill(c(part, subgroup, form_id, form_label, form_type), .direction = "down") %>%
-  group_by(form_id) %>%
-  fill(c(condition, required), .direction = "down") %>%
-  ungroup()
+  tidyr::fill(c(part, subgroup, form_id, form_label, form_type), .direction = "down") %>%
+  dplyr::group_by(form_id) %>%
+  tidyr::fill(c(condition, required), .direction = "down") %>%
+  dplyr::ungroup()
 
 # get list of simple inputs
 inputs_simple_list <- SCHEME_MAIN %>%
-  filter(!form_type %in% c("inline_table", "description")) %>%
-  distinct(form_id, form_type) %>%
-  deframe()
+  dplyr::filter(!form_type %in% c("inline_table", "description")) %>%
+  dplyr::distinct(form_id, form_type) %>%
+  tibble::deframe()
 
 # get list of inputs with inline tables
 inputs_tables_list <- SCHEME_MAIN %>%
-  filter(form_type == "inline_table") %>%
-  distinct(form_id) %>%
-  deframe()
+  dplyr::filter(form_type == "inline_table") %>%
+  dplyr::distinct(form_id) %>%
+  tibble::deframe()
 
 
 # SETUP DB ==========================
@@ -77,7 +77,7 @@ con <- make_db_connection()
 
 # init DB (write dummy data to "main" table)
 if (!"main" %in% dbListTables(con)) {
-  dummy_df <- mutate(get_dummy_df(), id = "dummy")
+  dummy_df <- dplyr::mutate(get_dummy_df(), id = "dummy")
 
   # write dummy df into base, then delete dummy row
   DBI::dbWriteTable(con, "main", dummy_df, append = TRUE)
@@ -114,12 +114,12 @@ if (identical(colnames(DBI::dbReadTable(con, "main")), names(inputs_simple_list)
     # add empty data for each new input form
     for (i in form_base_difference) {
       df_to_rewrite <- df_to_rewrite %>%
-        mutate(!!sym(i) := get_empty_data(inputs_simple_list[i]))
+        dplyr::mutate(!!dplyr::sym(i) := get_empty_data(inputs_simple_list[i]))
     }
 
     # reorder due to scheme
     df_to_rewrite <- df_to_rewrite %>%
-      select(all_of(names(inputs_simple_list)))
+      dplyr::select(dplyr::all_of(names(inputs_simple_list)))
 
     DBI::dbWriteTable(con, "main", df_to_rewrite, overwrite = TRUE)
     DBI::dbExecute(con, "DELETE FROM main WHERE id = 'dummy'")
@@ -143,17 +143,17 @@ inline_tables <- purrr::map(
   .f = \(x_inline_table_name) {
     # получить имя файла со схемой
     file_name <- SCHEME_MAIN %>%
-      filter(form_id == x_inline_table_name) %>%
-      pull(choices)
+      dplyr::filter(form_id == x_inline_table_name) %>%
+      dplyr::pull(choices)
 
     # load scheme
     schemaaa <- readxl::read_xlsx(fs::path(folder_with_schemas, file_name)) %>%
-      fill(everything(), .direction = "down")
+      tidyr::fill(dplyr::everything(), .direction = "down")
 
     # список форм в схеме
     inline_forms <- schemaaa %>%
-      distinct(form_id) %>%
-      pull()
+      dplyr::distinct(form_id) %>%
+      dplyr::pull()
 
     # макет таблицы (пустой)
     DF_gen <- as.list(setNames(rep(as.character(NA), length(inline_forms)), inline_forms)) |>
@@ -171,10 +171,12 @@ inline_tables <- purrr::map(
 # функция
 create_forms <- function(form_id, form_label, form_type) {
   # check if have condition
-  condition <- filter(SCHEME_MAIN, form_id == {{ form_id }}) %>%
-    distinct(condition) %>%
-    pull()
-  choices <- filter(SCHEME_MAIN, form_id == {{ form_id }}) %>% pull(choices)
+  condition <- dplyr::filter(SCHEME_MAIN, form_id == {{ form_id }}) %>%
+    dplyr::distinct(condition) %>%
+    dplyr::pull()
+
+  choices <- dplyr::filter(SCHEME_MAIN, form_id == {{ form_id }}) %>% 
+    dplyr::pull(choices)
 
   # simple text or number input
   if (form_type %in% c("text", "number")) {
@@ -504,10 +506,10 @@ server <- function(input, output) {
 
         # убрать дубликаты
         schema_comp <- schema %>%
-          distinct(form_id, form_label, form_type)
+          dplyr::distinct(form_id, form_label, form_type)
 
         # заголовки
-        headers <- pull(schema_comp, form_label)
+        headers <- dplyr::pull(schema_comp, form_label)
 
         # fixes empty rows error
         rownames(rhand_tables[[x]]) <- NULL
@@ -524,10 +526,12 @@ server <- function(input, output) {
         # циклом итерируемся по индексу;
         for (i in seq(1, length(schema_comp$form_id))) {
           # получаем информацию о типе столбца
-          type <- filter(schema_comp, form_id == schema_comp$form_id[i]) %>% pull(form_type)
+          type <- dplyr::filter(schema_comp, form_id == schema_comp$form_id[i]) %>%
+            dplyr::pull(form_type)
 
           # информация о воможных вариантнах выбора
-          choices <- filter(schema, form_id == schema_comp$form_id[i]) %>% pull(choices)
+          choices <- dplyr::filter(schema, form_id == schema_comp$form_id[i]) %>%
+            dplyr::pull(choices)
 
           ## проверки
           # текстовое поле
@@ -750,7 +754,7 @@ server <- function(input, output) {
           # handle with data
           if (nrow(df) >= 1 && x == "main") {
             df <- df %>%
-              mutate(across(contains("date"), as.Date)) %>%
+              dplyr::mutate(dplyr::across(dplyr::contains("date"), as.Date)) %>%
               print()
           }
           df
@@ -799,7 +803,7 @@ server <- function(input, output) {
 
           # iterate by level2 headers (subgroups)
           purrr::walk(
-            .x = pull(unique(subset(SCHEME_MAIN, part == x_iter1, "subgroup"))),
+            .x = dplyr::pull(unique(subset(SCHEME_MAIN, part == x_iter1, "subgroup"))),
             .f = \(x_iter2) {
               # get header 2 name
               HEADER_2 <- paste("##", x_iter2, "\n")
@@ -916,10 +920,10 @@ server <- function(input, output) {
       )
 
       df <- df %>%
-        as_tibble() %>%
+        dplyr::as_tibble() %>%
         janitor::remove_empty(which = c("rows")) %>%
         # adding id to dbs
-        mutate(id = input$id, .before = 1)
+        dplyr::mutate(id = input$id, .before = 1)
 
       # если таблица содержит хоть одну строку - сохранить таблицу в базу данных
       if (nrow(df) != 0) {
