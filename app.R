@@ -14,6 +14,9 @@ suppressPackageStartupMessages({
 
 source("helpers/functions.R")
 
+# box::purge_cache()
+# box::use(./helpers/db)
+
 # SOURCE FILES ============================
 config <- config::get(file = "configs/config.yml")
 
@@ -76,7 +79,7 @@ close_db_connection <- function(con, where = "") {
 con <- make_db_connection()
 
 # init DB (write dummy data to "main" table)
-if (!"main" %in% dbListTables(con)) {
+if (!"main" %in% DBI::dbListTables(con)) {
   dummy_df <- dplyr::mutate(get_dummy_df(), id = "dummy")
 
   # write dummy df into base, then delete dummy row
@@ -96,14 +99,14 @@ if (identical(colnames(DBI::dbReadTable(con, "main")), names(inputs_simple_list)
 
   # if lengths are equal
   if (length(names(inputs_simple_list)) == length(colnames(df_to_rewrite)) &&
-    length(form_base_difference) == 0 &&
-    length(base_form_difference) == 0) {
+        length(form_base_difference) == 0 &&
+        length(base_form_difference) == 0) {
     warning("changes in scheme file detected: assuming order changed only")
   }
 
   if (length(names(inputs_simple_list)) == length(colnames(df_to_rewrite)) &&
-    length(form_base_difference) != 0 &&
-    length(base_form_difference) != 0) {
+        length(form_base_difference) != 0 &&
+        length(base_form_difference) != 0) {
     stop("changes in scheme file detected: structure has been changed")
   }
 
