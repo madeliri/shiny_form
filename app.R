@@ -22,10 +22,17 @@ config <- config::get(file = "configs/config.yml")
 
 folder_with_schemas <- fs::path("configs/schemas")
 FILE_SCHEME         <- fs::path(folder_with_schemas, "main.xlsx")
-dbfile              <- fs::path("data.sqlite")
+# dbfile              <- fs::path("data.sqlite")
+
+# options(box.path = getwd())
+box::purge_cache()
+box::use(
+  modules/utils,
+  modules/global_options,
+  modules/db
+)
 
 # SETTINGS ================================
-DEBUG <- FALSE
 AUTH_ENABLED <- config$auth_module
 
 # CHECK FOR PANDOC
@@ -34,6 +41,7 @@ rmarkdown::find_pandoc(dir = "/opt/homebrew/bin/")
 
 # TODO: dynamic button render depend on pandoc installation
 if (!rmarkdown::pandoc_available()) warning("Can't find pandoc!")
+
 
 # SCHEME_MAIN UNPACK ==========================
 # load scheme
@@ -58,25 +66,25 @@ inputs_tables_list <- SCHEME_MAIN %>%
 
 
 # SETUP DB ==========================
-#' @description Function to open connection to db, disigned to easy dubugging.
-make_db_connection <- function(where = "") {
-  if (DEBUG) message("=== DB CONNECT ", where)
-  DBI::dbConnect(RSQLite::SQLite(), dbfile)
-}
+# #' @description Function to open connection to db, disigned to easy dubugging.
+# make_db_connection <- function(where = "") {
+#   if (DEBUG) message("=== DB CONNECT ", where)
+#   DBI::dbConnect(RSQLite::SQLite(), dbfile)
+# }
 
-#' @description Function to close connection to db, disigned to easy dubugging and
-#' hide warnings.
-close_db_connection <- function(con, where = "") {
-  tryCatch(
-    expr = DBI::dbDisconnect(con),
-    error = function(e) print(e),
-    warning = function(w) if (DEBUG) message("=!= ALREADY DISCONNECTED ", where),
-    finally = if (DEBUG) message("=/= DB DISCONNECT ", where)
-  )
-}
+# #' @description Function to close connection to db, disigned to easy dubugging and
+# #' hide warnings.
+# close_db_connection <- function(con, where = "") {
+#   tryCatch(
+#     expr = DBI::dbDisconnect(con),
+#     error = function(e) print(e),
+#     warning = function(w) if (DEBUG) message("=!= ALREADY DISCONNECTED ", where),
+#     finally = if (DEBUG) message("=/= DB DISCONNECT ", where)
+#   )
+# }
 
 # establish connection
-con <- make_db_connection()
+con <- db$make_db_connection()
 
 # init DB (write dummy data to "main" table)
 if (!"main" %in% DBI::dbListTables(con)) {
@@ -117,7 +125,7 @@ if (identical(colnames(DBI::dbReadTable(con, "main")), names(inputs_simple_list)
     # add empty data for each new input form
     for (i in form_base_difference) {
       df_to_rewrite <- df_to_rewrite %>%
-        dplyr::mutate(!!dplyr::sym(i) := get_empty_data(inputs_simple_list[i]))
+        dplyr::mutate(!!dplyr::sym(i) := utils$get_empty_data(inputs_simple_list[i]))
     }
 
     # reorder due to scheme
@@ -136,7 +144,7 @@ if (identical(colnames(DBI::dbReadTable(con, "main")), names(inputs_simple_list)
 }
 
 # close connection to prevent data loss
-close_db_connection(con)
+db$close_db_connection(con)
 
 
 # INLINE TABLES =====================
@@ -144,6 +152,7 @@ close_db_connection(con)
 inline_tables <- purrr::map(
   .x = purrr::set_names(inputs_tables_list),
   .f = \(x_inline_table_name) {
+
     # получить имя файла со схемой
     file_name <- SCHEME_MAIN %>%
       dplyr::filter(form_id == x_inline_table_name) %>%
@@ -172,165 +181,184 @@ inline_tables <- purrr::map(
 
 # создание объектов для ввода
 # функция
-create_forms <- function(form_id, form_label, form_type) {
-  # check if have condition
-  condition <- dplyr::filter(SCHEME_MAIN, form_id == {{ form_id }}) %>%
-    dplyr::distinct(condition) %>%
-    dplyr::pull()
+# create_forms <- function(form_id, form_label, form_type) {
+#   # check if have condition
+#   condition <- dplyr::filter(SCHEME_MAIN, form_id == {{ form_id }}) %>%
+#     dplyr::distinct(condition) %>%
+#     dplyr::pull()
 
-  choices <- dplyr::filter(SCHEME_MAIN, form_id == {{ form_id }}) %>% 
-    dplyr::pull(choices)
+#   choices <- dplyr::filter(SCHEME_MAIN, form_id == {{ form_id }}) %>% 
+#     dplyr::pull(choices)
 
-  # simple text or number input
-  if (form_type %in% c("text", "number")) {
-    form <- shiny::textAreaInput(
-      inputId = form_id,
-      label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
-      rows = 1
-    )
-  }
+#   # simple text or number input
+#   if (form_type %in% c("text", "number")) {
+#     form <- shiny::textAreaInput(
+#       inputId = form_id,
+#       label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
+#       rows = 1
+#     )
+#   }
 
-  # simple date input
-  if (form_type == "date") {
-    # supress warning while trying keep data form empty by default
-    suppressWarnings({
-      form <- dateInput(
-        inputId = form_id,
-        label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
-        value = NA, # keep empty
-        format = "dd.mm.yyyy",
-        weekstart = 1,
-        language = "ru"
-      )
-    })
-  }
+#   # simple date input
+#   if (form_type == "date") {
+#     # supress warning while trying keep data form empty by default
+#     suppressWarnings({
+#       form <- dateInput(
+#         inputId = form_id,
+#         label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
+#         value = NA, # keep empty
+#         format = "dd.mm.yyyy",
+#         weekstart = 1,
+#         language = "ru"
+#       )
+#     })
+#   }
 
-  # еденичный выбор
-  if (form_type == "select_one") {
-    form <- selectizeInput(
-      inputId = form_id,
-      label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
-      choices = choices,
-      selected = NULL,
-      options = list(
-        create = FALSE,
-        onInitialize = I('function() { this.setValue(""); }')
-      )
-    )
-  }
+#   # еденичный выбор
+#   if (form_type == "select_one") {
+#     form <- selectizeInput(
+#       inputId = form_id,
+#       label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
+#       choices = choices,
+#       selected = NULL,
+#       options = list(
+#         create = FALSE,
+#         onInitialize = I('function() { this.setValue(""); }')
+#       )
+#     )
+#   }
 
-  # множественный выбор
-  if (form_type == "select_multiple") {
-    form <- selectizeInput(
-      inputId = form_id,
-      label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
-      choices = choices,
-      selected = NULL,
-      multiple = TRUE,
-      options = list(
-        create = FALSE,
-        onInitialize = I('function() { this.setValue(""); }')
-      )
-    )
-  }
+#   # множественный выбор
+#   if (form_type == "select_multiple") {
+#     form <- selectizeInput(
+#       inputId = form_id,
+#       label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
+#       choices = choices,
+#       selected = NULL,
+#       multiple = TRUE,
+#       options = list(
+#         create = FALSE,
+#         onInitialize = I('function() { this.setValue(""); }')
+#       )
+#     )
+#   }
 
-  # множественный выбор
-  if (form_type == "radio") {
-    form <- radioButtons(
-      inputId = form_id,
-      label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
-      choices = choices,
-      selected = character(0)
-    )
-  }
+#   # множественный выбор
+#   if (form_type == "radio") {
+#     form <- radioButtons(
+#       inputId = form_id,
+#       label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
+#       choices = choices,
+#       selected = character(0)
+#     )
+#   }
 
-  if (form_type == "checkbox") {
-    form <- checkboxGroupInput(
-      inputId = form_id,
-      # label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
-      label = h6(form_label),
-      choices = choices,
-      selected = character(0)
-    )
-  }
+#   if (form_type == "checkbox") {
+#     form <- checkboxGroupInput(
+#       inputId = form_id,
+#       # label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
+#       label = h6(form_label),
+#       choices = choices,
+#       selected = character(0)
+#     )
+#   }
 
-  # вложенная таблица
-  if (form_type == "inline_table") {
-    form <- rHandsontableOutput(outputId = form_id)
-  }
+#   # вложенная таблица
+#   if (form_type == "inline_table") {
+#     form <- rHandsontableOutput(outputId = form_id)
+#   }
 
-  # description part
-  if (form_type == "description") {
-    form <- div(HTML(form_label), style = "color:Gray;font-size: 90%;")
-  }
+#   # description part
+#   if (form_type == "description") {
+#     form <- div(HTML(form_label), style = "color:Gray;font-size: 90%;")
+#   }
 
-  # если есть условие создать кондитионал панель
-  if (!is.na(condition)) {
-    form <- conditionalPanel(
-      condition = condition,
-      form
-    )
-  }
+#   # если есть условие создать кондитионал панель
+#   if (!is.na(condition)) {
+#     form <- conditionalPanel(
+#       condition = condition,
+#       form
+#     )
+#   }
 
-  form
-}
+#   form
+# }
 
 # GENERATE UI ==================================
 # functions for making cards
-make_cards_fn <- function(sub_group) {
-  subgroups_inputs <- df_forms %>%
-    dplyr::filter(subgroup == {{ sub_group }}) %>%
-    dplyr::distinct(form_id, form_label, form_type)
+# make_cards_fn <- function(sub_group) {
 
-  bslib::card(
-    bslib::card_header(sub_group, container = htmltools::h5),
-    full_screen = TRUE,
-    width = "4000px",
-    bslib::card_body(
-      fill = TRUE,
-      # передаем все аргументы в функцию для создания елементов
-      purrr::pmap(subgroups_inputs, create_forms)
-    )
-  )
-}
+#   subgroups_inputs <- df_forms %>%
+#     dplyr::filter(subgroup == {{sub_group}}) %>%
+#     dplyr::distinct(form_id, form_label, form_type)
+
+#   subgroups_inputs2 <- SCHEME_MAIN |>
+#     dplyr::filter(subgroup == {{sub_group}}) %>%
+#     dplyr::distinct(form_id, form_label, form_type, condition)
+
+#   print(subgroups_inputs2)
+
+#   bslib::card(
+#     bslib::card_header(sub_group, container = htmltools::h5),
+#     full_screen = TRUE,
+#     width = "4000px",
+#     bslib::card_body(
+#       fill = TRUE,
+#       # передаем все аргументы в функцию для создания елементов
+#       purrr::pmap(
+#         .l = subgroups_inputs,
+#         .f = utils$create_forms,
+#         scheme = SCHEME_MAIN
+#       )
+#     )
+#   )
+# }
 
 # get pages list
 pages_list <- unique(SCHEME_MAIN$part)
 
-# get all forms df
-df_forms <- SCHEME_MAIN %>%
-  dplyr::distinct(part, subgroup, form_id, form_label, form_type)
+# # get all forms df
+# df_forms <- SCHEME_MAIN %>%
+#   dplyr::distinct(part, subgroup, form_id, form_label, form_type)
 
-# generate nav panels
+# generate nav panels for each page
 nav_panels_list <- purrr::map(
   .x = pages_list,
-  .f = \(x_page) {
-    # get info about inputs for current page
-    page_forms <- SCHEME_MAIN %>%
-      dplyr::filter(part == {{ x_page }}) %>%
-      dplyr::distinct(subgroup, form_id, form_label, form_type)
-
-    # get list of columns
-    cols_list <- unique(page_forms$subgroup)
-
-    # making cards
-    cards <- purrr::map(
-      .x = cols_list,
-      .f = make_cards_fn
-    )
-
-    # make page wrap
-    page_wrap <- bslib::layout_column_wrap(
-      # width = "350px", height = NULL, #was 800
-      width = 1 / 4, height = NULL, # was 800
-      fixed_width = TRUE,
-      !!!cards # unpack list of cards
-    )
-
-    # add panel wrap to nav_panel
-    bslib::nav_panel(x_page, page_wrap)
-  }
+  .f = utils$make_panels,
+  main_scheme = SCHEME_MAIN
 )
+
+# nav_panels_list <- purrr::map(
+#   .x = pages_list,
+#   .f = \(x_page) {
+
+#     # get info about inputs for current page
+#     page_forms <- SCHEME_MAIN %>%
+#       dplyr::filter(part == {{x_page}}) %>%
+#       dplyr::distinct(subgroup, form_id, form_label, form_type)
+
+#     # get list of columns
+#     cols_list <- unique(page_forms$subgroup)
+
+#     # making cards
+#     cards <- purrr::map(
+#       .x = cols_list,
+#       .f = utils$make_cards_fn,
+#       main_scheme = SCHEME_MAIN
+#     )
+
+#     # make page wrap
+#     page_wrap <- bslib::layout_column_wrap(
+#       # width = "350px", height = NULL, #was 800
+#       width = 1 / 4, height = NULL, # was 800
+#       fixed_width = TRUE,
+#       !!!cards # unpack list of cards
+#     )
+
+#     # add panel wrap to nav_panel
+#     bslib::nav_panel(x_page, page_wrap)
+#   }
+# )
 
 # UI =======================
 ui <- page_sidebar(
@@ -413,6 +441,7 @@ server <- function(input, output) {
   values <- reactiveValues(data = NULL)
   rhand_tables <- reactiveValues()
 
+
   # VALIDATIONS ============================
   # create new validator
   iv <- shinyvalidate::InputValidator$new()
@@ -422,10 +451,13 @@ server <- function(input, output) {
     .x = names(inputs_simple_list),
     .f = \(x_input_id) {
       form_type <- inputs_simple_list[[x_input_id]]
-      choices <- filter(SCHEME_MAIN, form_id == {{ x_input_id }}) %>% pull(choices)
-      val_required <- filter(SCHEME_MAIN, form_id == {{ x_input_id }}) %>%
-        distinct(required) %>%
-        pull(required)
+
+      choices <- dplyr::filter(SCHEME_MAIN, form_id == {{x_input_id}}) %>%
+        dplyr::pull(choices)
+
+      val_required <- dplyr::filter(SCHEME_MAIN, form_id == {{x_input_id}}) %>%
+        dplyr::distinct(required) %>%
+        dplyr::pull(required)
 
       # for `number` type: if in `choices` column has values then parsing them to range validation
       # value `0; 250` -> transform to rule validation value from 0 to 250
@@ -518,13 +550,17 @@ server <- function(input, output) {
         rownames(rhand_tables[[x]]) <- NULL
 
         # создать объект рандсонтебл
-        rh_tabel <- rhandsontable(
+        rh_tabel <- rhandsontable::rhandsontable(
           rhand_tables[[x]],
           colHeaders = headers,
           rowHeaders = NULL,
           height = 400,
         ) %>%
-          hot_cols(colWidths = 120, manualColumnResize = TRUE, columnSorting = TRUE)
+          rhandsontable::hot_cols(
+            colWidths = 120,
+            manualColumnResize = TRUE,
+            columnSorting = TRUE
+          )
 
         # циклом итерируемся по индексу;
         for (i in seq(1, length(schema_comp$form_id))) {
@@ -564,6 +600,7 @@ server <- function(input, output) {
     )
   })
 
+
   # BUTTONS LOGIC ======================
   ## clear all inputs ==================
   # show modal on click of button
@@ -579,10 +616,10 @@ server <- function(input, output) {
       .y = names(inputs_simple_list),
       .f = \(x_type, x_id) {
         # using function to update forms
-        update_forms_with_data(
+        utils$update_forms_with_data(
           id = x_id,
           type = x_type,
-          value = get_empty_data(x_type)
+          value = utils$get_empty_data(x_type)
         )
       }
     )
@@ -603,8 +640,8 @@ server <- function(input, output) {
   # сохранить простые данные;
   observeEvent(input$save_data_button, {
     req(input$id)
-    con <- make_db_connection("save_data_button")
-    on.exit(close_db_connection(con, "save_data_button"), add = TRUE)
+    con <- db$make_db_connection("save_data_button")
+    on.exit(db$close_db_connection(con, "save_data_button"), add = TRUE)
 
     ## MAIN
     # собрать все значения по введенным данным;
@@ -615,14 +652,14 @@ server <- function(input, output) {
 
         # return empty if 0 element
         if (length(input_d) == 0) {
-          return(get_empty_data(inputs_simple_list[[x]]))
+          return(utils$get_empty_data(inputs_simple_list[[x]]))
         }
         # return element if there one
         if (length(input_d) == 1) {
           return(input_d)
         }
         # если елементов больше одного - объединять через ";"
-        if (length(input_d) > 1) paste(input_d, collapse = "; ")
+        if (length(input_d) > 1) paste(input_d, collapse = getOption("SYMBOL_DELIM"))
       }
     )
 
@@ -660,8 +697,8 @@ server <- function(input, output) {
 
   ## get list of id's from db =====================
   observeEvent(input$load_data_button, {
-    con <- make_db_connection("load_data_button")
-    on.exit(close_db_connection(con, "load_data_button"))
+    con <- db$make_db_connection("load_data_button")
+    on.exit(db$close_db_connection(con, "load_data_button"))
 
     if (length(dbListTables(con)) != 0 && "main" %in% DBI::dbListTables(con)) {
       # GET DATA files
@@ -691,8 +728,8 @@ server <- function(input, output) {
 
   ## load data to input forms ==================================
   observeEvent(input$read_data, {
-    con <- make_db_connection("read_data")
-    on.exit(close_db_connection(con, "read_data"), add = TRUE)
+    con <- db$make_db_connection("read_data")
+    on.exit(db$close_db_connection(con, "read_data"), add = TRUE)
 
     # main df read
     test_read_df <- read_df_from_db_by_id("main", con)
@@ -705,14 +742,14 @@ server <- function(input, output) {
       .x = inputs_simple_list,
       .y = names(inputs_simple_list),
       .f = \(x_type, x_id) {
-        if (DEBUG) {
+        if (getOption("APP.DEBUG")) {
           values_load <- test_read_df[[x_id]]
           print(paste(x_type, x_id, values_load, sep = " || "))
           print(is.na(values_load))
         }
 
-        # using function to update forms
-        update_forms_with_data(
+        # updating forms with loaded data
+        utils$update_forms_with_data(
           id = x_id,
           type = x_type,
           value = test_read_df[[x_id]]
@@ -744,8 +781,8 @@ server <- function(input, output) {
   output$downloadData <- downloadHandler(
     filename = paste0("d2tra_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".xlsx"),
     content = function(file) {
-      con <- make_db_connection("downloadData")
-      on.exit(close_db_connection(con, "downloadData"), add = TRUE)
+      con <- db$make_db_connection("downloadData")
+      on.exit(db$close_db_connection(con, "downloadData"), add = TRUE)
 
       # get all data
       list_of_df <- purrr::map(
@@ -875,8 +912,8 @@ server <- function(input, output) {
 
   ## trigger saving function =============
   observeEvent(input$data_save, {
-    con <- make_db_connection("saving data (from modal conf)")
-    on.exit(close_db_connection(con, "saving data (from modal conf)"), add = TRUE)
+    con <- db$make_db_connection("saving data (from modal conf)")
+    on.exit(db$close_db_connection(con, "saving data (from modal conf)"), add = TRUE)
 
     # убираем плашку
     removeModal()
@@ -895,7 +932,7 @@ server <- function(input, output) {
   # FUNCTIONS ==============================
   ## write all inputs to db ================
   write_all_to_db <- function() {
-    con <- make_db_connection("fn call `write_all_to_db()`")
+    con <- db$make_db_connection("fn call `write_all_to_db()`")
     # on.exit(close_db_connection("fn call `write_all_to_db()`"), add = TRUE)
 
     # write main
