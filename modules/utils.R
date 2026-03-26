@@ -5,7 +5,6 @@
     'Module path: "', basename(box::file()), '"'
   )
 }
-# ================
 
 # asdasd
 #' @export
@@ -22,7 +21,7 @@ make_panels <- function(page_name, main_scheme) {
   # making cards
   cards <- purrr::map(
     .x = cols_list,
-    .f = make_cards_fn,
+    .f = render_cards_with_forms,
     main_scheme = main_scheme
   )
 
@@ -43,8 +42,27 @@ make_panels <- function(page_name, main_scheme) {
 }
 
 # functions for making cards
+# DO THIS INSTEAD !!!
 #' @export
-make_cards_fn <- function(sub_group, main_scheme) {
+# make_forms_by_scheme <- function(tool_id, main_scheme, ns) {
+
+#   ns <- NS(ns(tool_id))
+
+#   main_scheme <<- main_scheme
+#   subgroup_schema <- main_scheme |>
+#     dplyr::filter(tool_id == {{tool_id}})
+ 
+#   purrr::pmap(
+#     .l = dplyr::distinct(subgroup_schema, form_id, form_label, form_type),
+#     .f = render_forms,
+#     schema = subgroup_schema,
+#     ns = ns
+#   )
+# }
+
+# functions for making cards
+#' @export
+render_cards_with_forms <- function(sub_group, main_scheme) {
 
   main_scheme <<- main_scheme
   subgroups_inputs <- main_scheme |>
@@ -54,13 +72,14 @@ make_cards_fn <- function(sub_group, main_scheme) {
   bslib::card(
     bslib::card_header(sub_group, container = htmltools::h5),
     full_screen = TRUE,
+    fill = TRUE,
     width = "4000px",
     bslib::card_body(
       fill = TRUE,
       # передаем все аргументы в функцию для создания елементов
       purrr::pmap(
         .l = subgroups_inputs,
-        .f = create_forms,
+        .f = render_forms,
         main_scheme = main_scheme
       )
     )
@@ -70,20 +89,52 @@ make_cards_fn <- function(sub_group, main_scheme) {
 # UI RELATED ============================
 #' @export
 #' @param TEST s
-create_forms <- function(
+render_forms <- function(
   form_id,
   form_label,
   form_type,
   main_scheme
 ) {
 
+  filterd_line <- dplyr::filter(main_scheme, form_id == {{form_id}})
+
   # check if have condition
-  condition <- dplyr::filter(main_scheme, form_id == {{form_id}}) |>
-    dplyr::distinct(condition) |>
+  condition <- unique(filterd_line$condition)
+
+  # get choices from schema
+  choices <- filterd_line$choices
+
+  # get choices from schema
+  description <- unique(filterd_line) |>
+    dplyr::filter(!is.na(form_description)) |>
+    dplyr::distinct(form_description) |>
     dplyr::pull()
 
-  choices <- dplyr::filter(main_scheme, form_id == {{form_id}}) |>
-    dplyr::pull(choices)
+  # описание
+  if (length(description) > 1) {
+    rlang::abort(sprintf(
+      "%s - более чем 1 уникальный вариант описания:\n%s", form_id, paste0(description, collapse = "\n")
+    ))
+  } else if (length(description) == 0) {
+    description <- NA
+  }
+
+  # отдельно создаем заголовки
+  label <- if (is.na(description) && is.na(form_label)) {
+    NULL
+  } else {
+    shiny::tagList(
+      if (!is.na(form_label)) {
+        shiny::span(form_label, style = "color: #444444; font-weight: 550; line-height: 1.4;")
+        # если в схеме есть поле с описанием - добавлеяем его следующей строчкой
+      },
+      if (!is.na(description) && !is.na(form_label)) shiny::br(),
+      if (!is.na(description)) {
+        shiny::span(shiny::markdown(description)) |> htmltools::tagAppendAttributes(style = "color:gray; font-size:small; line-height: 1.4;")
+        # span(description, style = "color:gray; font-size:small;")
+      }
+    )
+  }
 
   # simple text or number input
   if (form_type == "text") {
@@ -93,7 +144,7 @@ create_forms <- function(
 
     form <- shiny::textAreaInput(
       inputId = form_id,
-      label = shiny::span(style = "color: #444444; font-weight: 550;", form_label),
+      label = label,
       rows = rows_to_show
     )
   }
@@ -101,7 +152,7 @@ create_forms <- function(
   if (form_type == "number") {
     form <- shiny::textAreaInput(
       inputId = form_id,
-      label = shiny::span(style = "color: #444444; font-weight: 550;", form_label),
+      label = label,
       rows = 1
     )
   }
@@ -112,7 +163,7 @@ create_forms <- function(
     suppressWarnings({
       form <- shiny::dateInput(
         inputId = form_id,
-        label = shiny::span(style = "color: #444444; font-weight: 550;", form_label),
+        label = label,
         value = NA, # keep empty
         format = "dd.mm.yyyy",
         weekstart = 1,
@@ -125,7 +176,7 @@ create_forms <- function(
   if (form_type == "select_one") {
     form <- shiny::selectizeInput(
       inputId = form_id,
-      label = shiny::span(style = "color: #444444; font-weight: 550;", form_label),
+      label = label,
       choices = choices,
       selected = NULL,
       options = list(
@@ -139,7 +190,7 @@ create_forms <- function(
   if (form_type == "select_multiple") {
     form <- shiny::selectizeInput(
       inputId = form_id,
-      label = shiny::span(style = "color: #444444; font-weight: 550;", form_label),
+      label = label,
       choices = choices,
       selected = NULL,
       multiple = TRUE,
@@ -154,7 +205,7 @@ create_forms <- function(
   if (form_type == "radio") {
     form <- shiny::radioButtons(
       inputId = form_id,
-      label = shiny::span(style = "color: #444444; font-weight: 550;", form_label),
+      label = label,
       choices = choices,
       selected = character(0)
     )
@@ -163,7 +214,7 @@ create_forms <- function(
   if (form_type == "checkbox") {
     form <- shiny::checkboxGroupInput(
       inputId = form_id,
-      # label = shiny::span(style = "color: #444444; font-weight: 550;", form_label),
+      # label = label,
       label = shiny::h6(form_label),
       choices = choices,
       selected = character(0)
@@ -177,7 +228,18 @@ create_forms <- function(
 
   # description part
   if (form_type == "description") {
-    form <- shiny::div(shiny::HTML(form_label), style = "color:Gray;font-size: 90%;")
+    if(is.na(form_label)) {
+      form <- shiny::hr(style = "margin-bottom: -3px;")
+    } else {
+      form <- shiny::div(shiny::HTML(form_label), style = "color: Gray; font-size: 90%;")
+    }
+  }
+
+  if (form_type == "description_header") {
+    form <- shiny::h5(
+      label,
+      style = "margin-bottom: -8px; margin-top: 10px;"
+    )
   }
 
   # если есть условие создать кондитионал панель
@@ -187,6 +249,7 @@ create_forms <- function(
       form
     )
   }
+
   form
 }
 

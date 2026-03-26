@@ -54,7 +54,7 @@ SCHEME_MAIN <- readxl::read_xlsx(FILE_SCHEME) %>%
 
 # get list of simple inputs
 inputs_simple_list <- SCHEME_MAIN %>%
-  dplyr::filter(!form_type %in% c("inline_table", "description")) %>%
+  dplyr::filter(!form_type %in% c("inline_table", "description", "description_header")) %>%
   dplyr::distinct(form_id, form_type) %>%
   tibble::deframe()
 
@@ -179,147 +179,8 @@ inline_tables <- purrr::map(
   }
 )
 
-# создание объектов для ввода
-# функция
-# create_forms <- function(form_id, form_label, form_type) {
-#   # check if have condition
-#   condition <- dplyr::filter(SCHEME_MAIN, form_id == {{ form_id }}) %>%
-#     dplyr::distinct(condition) %>%
-#     dplyr::pull()
-
-#   choices <- dplyr::filter(SCHEME_MAIN, form_id == {{ form_id }}) %>% 
-#     dplyr::pull(choices)
-
-#   # simple text or number input
-#   if (form_type %in% c("text", "number")) {
-#     form <- shiny::textAreaInput(
-#       inputId = form_id,
-#       label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
-#       rows = 1
-#     )
-#   }
-
-#   # simple date input
-#   if (form_type == "date") {
-#     # supress warning while trying keep data form empty by default
-#     suppressWarnings({
-#       form <- dateInput(
-#         inputId = form_id,
-#         label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
-#         value = NA, # keep empty
-#         format = "dd.mm.yyyy",
-#         weekstart = 1,
-#         language = "ru"
-#       )
-#     })
-#   }
-
-#   # еденичный выбор
-#   if (form_type == "select_one") {
-#     form <- selectizeInput(
-#       inputId = form_id,
-#       label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
-#       choices = choices,
-#       selected = NULL,
-#       options = list(
-#         create = FALSE,
-#         onInitialize = I('function() { this.setValue(""); }')
-#       )
-#     )
-#   }
-
-#   # множественный выбор
-#   if (form_type == "select_multiple") {
-#     form <- selectizeInput(
-#       inputId = form_id,
-#       label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
-#       choices = choices,
-#       selected = NULL,
-#       multiple = TRUE,
-#       options = list(
-#         create = FALSE,
-#         onInitialize = I('function() { this.setValue(""); }')
-#       )
-#     )
-#   }
-
-#   # множественный выбор
-#   if (form_type == "radio") {
-#     form <- radioButtons(
-#       inputId = form_id,
-#       label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
-#       choices = choices,
-#       selected = character(0)
-#     )
-#   }
-
-#   if (form_type == "checkbox") {
-#     form <- checkboxGroupInput(
-#       inputId = form_id,
-#       # label = tags$span(style = "color: #444444; font-weight: 550;", form_label),
-#       label = h6(form_label),
-#       choices = choices,
-#       selected = character(0)
-#     )
-#   }
-
-#   # вложенная таблица
-#   if (form_type == "inline_table") {
-#     form <- rHandsontableOutput(outputId = form_id)
-#   }
-
-#   # description part
-#   if (form_type == "description") {
-#     form <- div(HTML(form_label), style = "color:Gray;font-size: 90%;")
-#   }
-
-#   # если есть условие создать кондитионал панель
-#   if (!is.na(condition)) {
-#     form <- conditionalPanel(
-#       condition = condition,
-#       form
-#     )
-#   }
-
-#   form
-# }
-
-# GENERATE UI ==================================
-# functions for making cards
-# make_cards_fn <- function(sub_group) {
-
-#   subgroups_inputs <- df_forms %>%
-#     dplyr::filter(subgroup == {{sub_group}}) %>%
-#     dplyr::distinct(form_id, form_label, form_type)
-
-#   subgroups_inputs2 <- SCHEME_MAIN |>
-#     dplyr::filter(subgroup == {{sub_group}}) %>%
-#     dplyr::distinct(form_id, form_label, form_type, condition)
-
-#   print(subgroups_inputs2)
-
-#   bslib::card(
-#     bslib::card_header(sub_group, container = htmltools::h5),
-#     full_screen = TRUE,
-#     width = "4000px",
-#     bslib::card_body(
-#       fill = TRUE,
-#       # передаем все аргументы в функцию для создания елементов
-#       purrr::pmap(
-#         .l = subgroups_inputs,
-#         .f = utils$create_forms,
-#         scheme = SCHEME_MAIN
-#       )
-#     )
-#   )
-# }
-
 # get pages list
 pages_list <- unique(SCHEME_MAIN$part)
-
-# # get all forms df
-# df_forms <- SCHEME_MAIN %>%
-#   dplyr::distinct(part, subgroup, form_id, form_label, form_type)
 
 # generate nav panels for each page
 nav_panels_list <- purrr::map(
@@ -327,38 +188,6 @@ nav_panels_list <- purrr::map(
   .f = utils$make_panels,
   main_scheme = SCHEME_MAIN
 )
-
-# nav_panels_list <- purrr::map(
-#   .x = pages_list,
-#   .f = \(x_page) {
-
-#     # get info about inputs for current page
-#     page_forms <- SCHEME_MAIN %>%
-#       dplyr::filter(part == {{x_page}}) %>%
-#       dplyr::distinct(subgroup, form_id, form_label, form_type)
-
-#     # get list of columns
-#     cols_list <- unique(page_forms$subgroup)
-
-#     # making cards
-#     cards <- purrr::map(
-#       .x = cols_list,
-#       .f = utils$make_cards_fn,
-#       main_scheme = SCHEME_MAIN
-#     )
-
-#     # make page wrap
-#     page_wrap <- bslib::layout_column_wrap(
-#       # width = "350px", height = NULL, #was 800
-#       width = 1 / 4, height = NULL, # was 800
-#       fixed_width = TRUE,
-#       !!!cards # unpack list of cards
-#     )
-
-#     # add panel wrap to nav_panel
-#     bslib::nav_panel(x_page, page_wrap)
-#   }
-# )
 
 # UI =======================
 ui <- page_sidebar(
@@ -371,7 +200,9 @@ ui <- page_sidebar(
     textOutput("status_message2"),
     actionButton("load_data_button", "Загрузить данные", icon("pencil", lib = "font-awesome")),
     downloadButton("downloadData", "Экспорт в .xlsx"),
-    downloadButton("downloadDocx", "get .docx (test only)")
+    downloadButton("downloadDocx", "get .docx (test only)"),
+    position = "left",
+    open = list(mobile = "always")
   ),
   # list of rendered panels
   navset_card_underline(
@@ -462,17 +293,20 @@ server <- function(input, output) {
       # for `number` type: if in `choices` column has values then parsing them to range validation
       # value `0; 250` -> transform to rule validation value from 0 to 250
       if (form_type == "number") {
+
         iv$add_rule(x_input_id, function(x) {
           # exit if empty
           if (check_for_empty_data(x)) {
             return(NULL)
           }
           # check for numeric
-          if (grepl("^[-]?(\\d*\\,\\d+|\\d+\\,\\d*|\\d+)$", x)) NULL else "Значение должно быть числом."
+          # if (grepl("^[-]?(\\d*\\,\\d+|\\d+\\,\\d*|\\d+)$", x)) NULL else "Значение должно быть числом."
+          if (grepl("^[+-]?\\d*[\\.|\\,]?\\d+$", x)) NULL else "Значение должно быть числом."
         })
 
+        # проверка на соответствие диапазону значений
         if (!is.na(choices)) {
-          # разделить на числа
+          # разделить на несколько елементов
           ranges <- as.integer(stringr::str_split_1(choices, "; "))
 
           # проверка на кол-во значений
@@ -482,12 +316,17 @@ server <- function(input, output) {
             iv$add_rule(
               x_input_id,
               function(x) {
+
+                # замена разделителя десятичных цифр
+                x <- stringr::str_replace(x, ",", ".")
+
                 # exit if empty
                 if (check_for_empty_data(x)) {
                   return(NULL)
                 }
+
                 # check for currect value
-                if (between(as.integer(x), ranges[1], ranges[2])) {
+                if (between(as.double(x), ranges[1], ranges[2])) {
                   NULL
                 } else {
                   glue::glue("Значение должно быть между {ranges[1]} и {ranges[2]}.")

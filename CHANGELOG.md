@@ -1,5 +1,4 @@
 ### 0.??.?
-
 ##### features
 - added checkboxes input form;
 - added button to reset data in forms;

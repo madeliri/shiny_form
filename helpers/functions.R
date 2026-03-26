@@ -28,6 +28,7 @@ get_dummy_df <- function() {
 #'
 #' Needed for proper data validation.
 check_for_empty_data <- function(value_to_check) {
+
   # for any 0-length
   if (length(value_to_check) == 0) return(TRUE)
 
