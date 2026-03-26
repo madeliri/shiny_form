@@ -5,9 +5,7 @@
     'Module path: "', basename(box::file()), '"'
   )
 }
-# ================
 
-# DB RELATED ===========================
 #' @export
 #' @description Function to open connection to db, disigned to easy dubugging.
 #' @param where text mark to distingiush calss

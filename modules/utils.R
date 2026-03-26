@@ -88,7 +88,6 @@ render_cards_with_forms <- function(sub_group, main_scheme) {
 
 # UI RELATED ============================
 #' @export
-#' @param TEST s
 render_forms <- function(
   form_id,
   form_label,
@@ -254,10 +253,10 @@ render_forms <- function(
 }
 
 
-
-
 # SERVER LOGIC ==========================
 #' @export
+#' @description
+#' Функция возращает пустое значение для каждого типа формы
 get_empty_data <- function(type) {
   if (type %in% c("text", "select_one", "select_multiple")) return(as.character(NA))
   if (type %in% c("radio", "checkbox")) return(as.character(NA))

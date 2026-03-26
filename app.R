@@ -1,7 +1,6 @@
 suppressPackageStartupMessages({
   library(DBI)
   library(RSQLite)
-  library(tibble)
   library(tidyr)
   library(dplyr)
   library(purrr)
@@ -65,24 +64,6 @@ inputs_tables_list <- SCHEME_MAIN %>%
   tibble::deframe()
 
 
-# SETUP DB ==========================
-# #' @description Function to open connection to db, disigned to easy dubugging.
-# make_db_connection <- function(where = "") {
-#   if (DEBUG) message("=== DB CONNECT ", where)
-#   DBI::dbConnect(RSQLite::SQLite(), dbfile)
-# }
-
-# #' @description Function to close connection to db, disigned to easy dubugging and
-# #' hide warnings.
-# close_db_connection <- function(con, where = "") {
-#   tryCatch(
-#     expr = DBI::dbDisconnect(con),
-#     error = function(e) print(e),
-#     warning = function(w) if (DEBUG) message("=!= ALREADY DISCONNECTED ", where),
-#     finally = if (DEBUG) message("=/= DB DISCONNECT ", where)
-#   )
-# }
-
 # establish connection
 con <- db$make_db_connection()
 
@@ -124,12 +105,12 @@ if (identical(colnames(DBI::dbReadTable(con, "main")), names(inputs_simple_list)
 
     # add empty data for each new input form
     for (i in form_base_difference) {
-      df_to_rewrite <- df_to_rewrite %>%
+      df_to_rewrite <- df_to_rewrite |>
         dplyr::mutate(!!dplyr::sym(i) := utils$get_empty_data(inputs_simple_list[i]))
     }
 
     # reorder due to scheme
-    df_to_rewrite <- df_to_rewrite %>%
+    df_to_rewrite <- df_to_rewrite |>
       dplyr::select(dplyr::all_of(names(inputs_simple_list)))
 
     DBI::dbWriteTable(con, "main", df_to_rewrite, overwrite = TRUE)
@@ -154,17 +135,17 @@ inline_tables <- purrr::map(
   .f = \(x_inline_table_name) {
 
     # получить имя файла со схемой
-    file_name <- SCHEME_MAIN %>%
-      dplyr::filter(form_id == x_inline_table_name) %>%
+    file_name <- SCHEME_MAIN |>
+      dplyr::filter(form_id == x_inline_table_name) |>
       dplyr::pull(choices)
 
     # load scheme
-    schemaaa <- readxl::read_xlsx(fs::path(folder_with_schemas, file_name)) %>%
+    schemaaa <- readxl::read_xlsx(fs::path(folder_with_schemas, file_name)) |>
       tidyr::fill(dplyr::everything(), .direction = "down")
 
     # список форм в схеме
-    inline_forms <- schemaaa %>%
-      dplyr::distinct(form_id) %>%
+    inline_forms <- schemaaa |>
+      dplyr::distinct(form_id) |>
       dplyr::pull()
 
     # макет таблицы (пустой)
@@ -283,11 +264,11 @@ server <- function(input, output) {
     .f = \(x_input_id) {
       form_type <- inputs_simple_list[[x_input_id]]
 
-      choices <- dplyr::filter(SCHEME_MAIN, form_id == {{x_input_id}}) %>%
+      choices <- dplyr::filter(SCHEME_MAIN, form_id == {{x_input_id}}) |>
         dplyr::pull(choices)
 
-      val_required <- dplyr::filter(SCHEME_MAIN, form_id == {{x_input_id}}) %>%
-        dplyr::distinct(required) %>%
+      val_required <- dplyr::filter(SCHEME_MAIN, form_id == {{x_input_id}}) |>
+        dplyr::distinct(required) |>
         dplyr::pull(required)
 
       # for `number` type: if in `choices` column has values then parsing them to range validation
@@ -379,7 +360,7 @@ server <- function(input, output) {
         schema <- inline_tables[[x]]$schema
 
         # убрать дубликаты
-        schema_comp <- schema %>%
+        schema_comp <- schema |>
           dplyr::distinct(form_id, form_label, form_type)
 
         # заголовки
@@ -394,7 +375,7 @@ server <- function(input, output) {
           colHeaders = headers,
           rowHeaders = NULL,
           height = 400,
-        ) %>%
+        ) |>
           rhandsontable::hot_cols(
             colWidths = 120,
             manualColumnResize = TRUE,
@@ -404,29 +385,29 @@ server <- function(input, output) {
         # циклом итерируемся по индексу;
         for (i in seq(1, length(schema_comp$form_id))) {
           # получаем информацию о типе столбца
-          type <- dplyr::filter(schema_comp, form_id == schema_comp$form_id[i]) %>%
+          type <- dplyr::filter(schema_comp, form_id == schema_comp$form_id[i]) |>
             dplyr::pull(form_type)
 
           # информация о воможных вариантнах выбора
-          choices <- dplyr::filter(schema, form_id == schema_comp$form_id[i]) %>%
+          choices <- dplyr::filter(schema, form_id == schema_comp$form_id[i]) |>
             dplyr::pull(choices)
 
           ## проверки
           # текстовое поле
           if (type == "text") {
-            rh_tabel <- rh_tabel %>%
+            rh_tabel <- rh_tabel |>
               hot_col(col = headers[i], type = "autocomplete")
           }
 
           # выбор из списка
           if (type == "select_one") {
-            rh_tabel <- rh_tabel %>%
+            rh_tabel <- rh_tabel |>
               hot_col(col = headers[i], type = "dropdown", source = choices)
           }
 
           # дата
           if (type == "date") {
-            rh_tabel <- rh_tabel %>%
+            rh_tabel <- rh_tabel |>
               hot_col(col = headers[i], type = "date", dateFormat = "DD.MM.YYYY", language = "ru-RU")
           }
         }
