@@ -6,23 +6,33 @@
   )
 }
 
-# asdasd
+# 
 #' @export
-make_panels <- function(page_name, main_scheme) {
+make_panels <- function(scheme) {
 
-  # get info about inputs for current page
-  page_forms <- main_scheme |>
-    dplyr::filter(part == {{page_name}}) |>
-    dplyr::distinct(subgroup, form_id, form_label, form_type)
-
-  # get list of columns
-  cols_list <- unique(page_forms$subgroup)
-
-  # making cards
   cards <- purrr::map(
-    .x = cols_list,
-    .f = render_cards_with_forms,
-    main_scheme = main_scheme
+    .x = unique(scheme$subgroup),
+    .f = \(sub_group) {
+
+      this_column_cards_scheme <- scheme |>
+        dplyr::filter(subgroup == {{sub_group}})
+
+      bslib::card(
+        bslib::card_header(sub_group, container = htmltools::h5),
+        full_screen = TRUE,
+        fill = TRUE,
+        width = "4000px",
+        bslib::card_body(
+          fill = TRUE,
+          # передаем все аргументы в функцию для создания елементов
+          purrr::pmap(
+            .l = dplyr::distinct(this_column_cards_scheme, form_id, form_label, form_type),
+            .f = render_forms,
+            main_scheme = scheme
+          )
+        )
+      )
+    }
   )
 
   # make page wrap
@@ -33,60 +43,8 @@ make_panels <- function(page_name, main_scheme) {
     # unpack list of cards
     !!!cards
   )
-
-  # add panel wrap to nav_panel
-  bslib::nav_panel(
-    title = page_name,
-    page_wrap
-  )
 }
 
-# functions for making cards
-# DO THIS INSTEAD !!!
-#' @export
-# make_forms_by_scheme <- function(tool_id, main_scheme, ns) {
-
-#   ns <- NS(ns(tool_id))
-
-#   main_scheme <<- main_scheme
-#   subgroup_schema <- main_scheme |>
-#     dplyr::filter(tool_id == {{tool_id}})
- 
-#   purrr::pmap(
-#     .l = dplyr::distinct(subgroup_schema, form_id, form_label, form_type),
-#     .f = render_forms,
-#     schema = subgroup_schema,
-#     ns = ns
-#   )
-# }
-
-# functions for making cards
-#' @export
-render_cards_with_forms <- function(sub_group, main_scheme) {
-
-  main_scheme <<- main_scheme
-  subgroups_inputs <- main_scheme |>
-    dplyr::filter(subgroup == {{sub_group}}) |>
-    dplyr::distinct(form_id, form_label, form_type)
-
-  bslib::card(
-    bslib::card_header(sub_group, container = htmltools::h5),
-    full_screen = TRUE,
-    fill = TRUE,
-    width = "4000px",
-    bslib::card_body(
-      fill = TRUE,
-      # передаем все аргументы в функцию для создания елементов
-      purrr::pmap(
-        .l = subgroups_inputs,
-        .f = render_forms,
-        main_scheme = main_scheme
-      )
-    )
-  )
-}
-
-# UI RELATED ============================
 #' @export
 render_forms <- function(
   form_id,
@@ -95,6 +53,7 @@ render_forms <- function(
   main_scheme
 ) {
 
+  form <- NULL
   filterd_line <- dplyr::filter(main_scheme, form_id == {{form_id}})
 
   # check if have condition
@@ -225,6 +184,10 @@ render_forms <- function(
     form <- rhandsontable::rHandsontableOutput(outputId = form_id)
   }
 
+  if (form_type == "inline_table2") {
+    form <- shiny::actionButton(inputId = form_id, label = label)
+  }
+
   # description part
   if (form_type == "description") {
     if(is.na(form_label)) {
@@ -249,6 +212,7 @@ render_forms <- function(
     )
   }
 
+  if (is.null(form)) cli::cli_abort("невозможно создать форму типа '{form_type}' (id: '{form_id}') !")
   form
 }
 

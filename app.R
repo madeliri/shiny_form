@@ -42,27 +42,39 @@ rmarkdown::find_pandoc(dir = "/opt/homebrew/bin/")
 if (!rmarkdown::pandoc_available()) warning("Can't find pandoc!")
 
 
+load_scheme_from_xlsx <- function(
+  filename,
+  colnames = c("part", "subgroup", "form_id", "form_label", "form_type")
+) {
+
+  readxl::read_xlsx(filename) |>
+    # fill NA down
+    tidyr::fill(all_of(colnames), .direction = "down") |>
+    dplyr::group_by(form_id) |>
+    tidyr::fill(c(condition, required), .direction = "down") |>
+    dplyr::ungroup()
+
+}
+
 # SCHEME_MAIN UNPACK ==========================
 # load scheme
-SCHEME_MAIN <- readxl::read_xlsx(FILE_SCHEME) %>%
-  # fill NA down
-  tidyr::fill(c(part, subgroup, form_id, form_label, form_type), .direction = "down") %>%
-  dplyr::group_by(form_id) %>%
-  tidyr::fill(c(condition, required), .direction = "down") %>%
-  dplyr::ungroup()
+SCHEME_MAIN <- load_scheme_from_xlsx(FILE_SCHEME)
 
 # get list of simple inputs
-inputs_simple_list <- SCHEME_MAIN %>%
-  dplyr::filter(!form_type %in% c("inline_table", "description", "description_header")) %>%
-  dplyr::distinct(form_id, form_type) %>%
+inputs_simple_list <- SCHEME_MAIN |>
+  dplyr::filter(!form_type %in% c("inline_table", "inline_table2","description", "description_header")) |>
+  dplyr::distinct(form_id, form_type) |>
   tibble::deframe()
 
 # get list of inputs with inline tables
-inputs_tables_list <- SCHEME_MAIN %>%
-  dplyr::filter(form_type == "inline_table") %>%
-  dplyr::distinct(form_id) %>%
+inputs_tables_list <- SCHEME_MAIN |>
+  dplyr::filter(form_type == "inline_table") |>
+  dplyr::distinct(form_id) |>
   tibble::deframe()
 
+inputs_table_df <- SCHEME_MAIN |>
+  dplyr::filter(form_type == "inline_table2") |>
+  dplyr::distinct(form_id, .keep_all = TRUE)
 
 # establish connection
 con <- db$make_db_connection()
@@ -160,14 +172,23 @@ inline_tables <- purrr::map(
   }
 )
 
-# get pages list
-pages_list <- unique(SCHEME_MAIN$part)
-
 # generate nav panels for each page
 nav_panels_list <- purrr::map(
-  .x = pages_list,
-  .f = utils$make_panels,
-  main_scheme = SCHEME_MAIN
+  .x = unique(SCHEME_MAIN$part),
+  .f = \(page_name) {
+
+    # отделить схему для каждой страницы
+    this_page_panels_scheme <- SCHEME_MAIN |>
+      dplyr::filter(part == {{page_name}})
+
+    this_page_panels <- utils$make_panels(this_page_panels_scheme)
+
+    # add panel wrap to nav_panel
+    bslib::nav_panel(
+      title = page_name,
+      this_page_panels
+    )
+  }
 )
 
 # UI =======================
@@ -253,6 +274,49 @@ server <- function(input, output) {
   values <- reactiveValues(data = NULL)
   rhand_tables <- reactiveValues()
 
+  # inline tables 2 ========================
+  purrr::walk(
+    .x = inputs_table_df$form_id,
+    .f = \(table_name) {
+
+      observeEvent(input[[table_name]], {
+
+        this_inline_table2_info <- inputs_table_df |>
+          dplyr::filter(form_id == {table_name})
+
+        inline_table2_file_name <- this_inline_table2_info$choices
+
+        this_inline_table2_scheme <- fs::path(folder_with_schemas, inline_table2_file_name) |>
+          load_scheme_from_xlsx(colnames = c("form_id", "form_label", "form_type"))
+
+        yay_its_fun <- purrr::pmap(
+            .l = dplyr::distinct(this_inline_table2_scheme, form_id, form_label, form_type),
+            .f = utils$render_forms,
+            main_scheme = this_inline_table2_scheme
+          )
+
+        ui_for_inline_table <- card(
+            height = "800px",
+            layout_sidebar(
+              sidebar = selectizeInput(
+                inputId = "aboba",
+                label = "key", 
+                choices = c("a", "b")
+              ),
+              yay_its_fun
+            )
+          )
+        
+        showModal(modalDialog(
+          ui_for_inline_table,
+          # title = modalButton("Dismiss"),,
+          footer = modalButton("Dismiss"),
+          size = "l"
+        ))
+
+      })
+    }
+  )
 
   # VALIDATIONS ============================
   # create new validator
