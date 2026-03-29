@@ -1,12 +1,3 @@
-# box ========
-.on_load = function(ns) {
-  message(
-    'Loading module "', box::name(), '"\n',
-    'Module path: "', basename(box::file()), '"'
-  )
-}
-
-# 
 #' @export
 make_panels <- function(scheme) {
 

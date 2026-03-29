@@ -819,6 +819,7 @@ server <- function(input, output) {
 
     # check if this table exist
     if (table_name %in% dbListTables(con)) {
+
       # prepare query
       query <- glue::glue("
         SELECT * FROM {table_name}

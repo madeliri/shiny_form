@@ -1,5 +1,5 @@
 
-
+#' @export
 init_val <- function(scheme, ns) {
 
   options(box.path = here::here())

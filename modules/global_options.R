@@ -1,14 +1,3 @@
-# box ========
-.on_load = function(ns) {
-  message(
-    'Loading module "', box::name(), '"\n',
-    'Module path: "', basename(box::file()), '"'
-  )
-  set_global_options()
-}
-
-# ================
-
 #' @export
 #' @description костыли для упрощения работы себе
 set_global_options <- function(

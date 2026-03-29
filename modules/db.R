@@ -1,10 +1,3 @@
-# box ========
-.on_load = function(ns) {
-  message(
-    'Loading module "', box::name(), '"\n',
-    'Module path: "', basename(box::file()), '"'
-  )
-}
 
 #' @export
 #' @description Function to open connection to db, disigned to easy dubugging.
@@ -15,7 +8,8 @@ make_db_connection <- function(where = "") {
 }
 
 #' @export
-#' @description Function to close connection to db, disigned to easy dubugging and
+#' @description 
+#' Function to close connection to db, disigned to easy dubugging and
 #' hide warnings.
 close_db_connection <- function(con, where = "") {
   tryCatch(
@@ -27,7 +21,8 @@ close_db_connection <- function(con, where = "") {
 }
 
 #' @export
-#' проверить если таблица есть в базе данных и инициировать ее, если от
+#' @description
+#' Проверить если таблица есть в базе данных и инициировать ее, если от
 check_if_table_is_exist_and_init_if_not <- function(
   table_name,
   forms_id_type_list,
@@ -36,7 +31,7 @@ check_if_table_is_exist_and_init_if_not <- function(
 
   if (table_name %in% DBI::dbListTables(con)) {
 
-    cli::cli_inform("таблица есть такая: 'table_name'")
+    cli::cli_inform(c("*" = "таблица есть такая: '{table_name}'"))
 
     # если таблица существует, производим проверку структуры таблицы
     compare_existing_table_with_schema(table_name, forms_id_type_list)
@@ -54,15 +49,21 @@ check_if_table_is_exist_and_init_if_not <- function(
 
 }
 
+#' @description
+#' Возращает пустое значение для каждого типа формы
 get_dummy_data <- function(type) {
 
   if (type %in% c("text", "select_one", "select_multiple")) return("dummy")
   if (type %in% c("radio", "checkbox")) return("dummy")
   if (type %in% c("date")) return(as.Date("1990-01-01"))
   if (type %in% c("number")) return(as.double(999))
+  cli::cli_abort("для типа формы '{type}' нет примера пустого значения!")
 
 }
 
+#' @description
+#' Генерация пустого датасета с пустыми значениями соответствующие
+#' типу данных
 get_dummy_df <- function(forms_id_type_list) {
 
   options(box.path = here::here())
@@ -76,6 +77,9 @@ get_dummy_df <- function(forms_id_type_list) {
 
 }
 
+#' @description
+#' Сравнение полей в существующей в базе данных таблице и попытка
+#' коррекции таблицы
 compare_existing_table_with_schema <- function(
   table_name,
   forms_id_type_list,
@@ -87,8 +91,9 @@ compare_existing_table_with_schema <- function(
 
   # checking if db structure in form compatible with alrady writed data (in case on changig form)
   if (identical(colnames(DBI::dbReadTable(con, table_name)), names(forms_id_type_list))) {
-    print("identical")
+    # ...
   } else {
+
     df_to_rewrite <- DBI::dbReadTable(con, table_name)
     form_base_difference <- setdiff(names(forms_id_type_list), colnames(df_to_rewrite))
     base_form_difference <- setdiff(colnames(df_to_rewrite), names(forms_id_type_list))
@@ -127,7 +132,6 @@ compare_existing_table_with_schema <- function(
     if (length(names(forms_id_type_list)) < length(colnames(df_to_rewrite))) {
       stop("changes in scheme file detected: some of inputs form was deleted! it may cause data loss!")
     }
-    # cleaning
-    rm(df_to_rewrite, form_base_difference)
+    
   }
 }
