@@ -28,7 +28,8 @@ box::purge_cache()
 box::use(
   modules/utils,
   modules/global_options,
-  modules/db
+  modules/db,
+  modules/data_validation
 )
 
 # SETTINGS ================================
@@ -40,7 +41,6 @@ rmarkdown::find_pandoc(dir = "/opt/homebrew/bin/")
 
 # TODO: dynamic button render depend on pandoc installation
 if (!rmarkdown::pandoc_available()) warning("Can't find pandoc!")
-
 
 load_scheme_from_xlsx <- function(
   filename,
@@ -56,15 +56,19 @@ load_scheme_from_xlsx <- function(
 
 }
 
+extract_forms_id_and_types_from_scheme <- function(scheme) {
+  scheme |>
+    dplyr::filter(!form_type %in% c("inline_table", "inline_table2","description", "description_header")) |>
+    dplyr::distinct(form_id, form_type) |>
+    tibble::deframe()
+}
+
 # SCHEME_MAIN UNPACK ==========================
 # load scheme
 SCHEME_MAIN <- load_scheme_from_xlsx(FILE_SCHEME)
 
 # get list of simple inputs
-inputs_simple_list <- SCHEME_MAIN |>
-  dplyr::filter(!form_type %in% c("inline_table", "inline_table2","description", "description_header")) |>
-  dplyr::distinct(form_id, form_type) |>
-  tibble::deframe()
+inputs_simple_list <- extract_forms_id_and_types_from_scheme(SCHEME_MAIN)
 
 # get list of inputs with inline tables
 inputs_tables_list <- SCHEME_MAIN |>
@@ -80,61 +84,32 @@ inputs_table_df <- SCHEME_MAIN |>
 con <- db$make_db_connection()
 
 # init DB (write dummy data to "main" table)
-if (!"main" %in% DBI::dbListTables(con)) {
-  dummy_df <- dplyr::mutate(get_dummy_df(), id = "dummy")
+db$check_if_table_is_exist_and_init_if_not("main", inputs_simple_list)
 
-  # write dummy df into base, then delete dummy row
-  DBI::dbWriteTable(con, "main", dummy_df, append = TRUE)
-  DBI::dbExecute(con, "DELETE FROM main WHERE id = 'dummy'")
+purrr::walk(
+  .x = unique(inputs_table_df$form_id),
+  .f = \(table_name) {
 
-  rm(dummy_df)
-}
+    this_inline_table2_info <- inputs_table_df |>
+      dplyr::filter(form_id == {table_name})
 
-# checking if db structure in form compatible with alrady writed data (in case on changig form)
-if (identical(colnames(DBI::dbReadTable(con, "main")), names(inputs_simple_list))) {
-  print("identical")
-} else {
-  df_to_rewrite <- DBI::dbReadTable(con, "main")
-  form_base_difference <- setdiff(names(inputs_simple_list), colnames(df_to_rewrite))
-  base_form_difference <- setdiff(colnames(df_to_rewrite), names(inputs_simple_list))
+    # получение имя файла с таблицой
+    inline_table2_file_name <- this_inline_table2_info$choices
 
-  # if lengths are equal
-  if (length(names(inputs_simple_list)) == length(colnames(df_to_rewrite)) &&
-        length(form_base_difference) == 0 &&
-        length(base_form_difference) == 0) {
-    warning("changes in scheme file detected: assuming order changed only")
+    # загрузка схемы для данной вложенной формы
+    this_inline_table2_scheme <- fs::path(folder_with_schemas, inline_table2_file_name) |>
+      load_scheme_from_xlsx(colnames = c("subgroup","form_id", "form_label", "form_type"))
+
+    this_table_id_and_types_list <- extract_forms_id_and_types_from_scheme(this_inline_table2_scheme)
+
+    db$check_if_table_is_exist_and_init_if_not(
+      table_name,
+      this_table_id_and_types_list,
+      con = con
+    )
+
   }
-
-  if (length(names(inputs_simple_list)) == length(colnames(df_to_rewrite)) &&
-        length(form_base_difference) != 0 &&
-        length(base_form_difference) != 0) {
-    stop("changes in scheme file detected: structure has been changed")
-  }
-
-  if (length(names(inputs_simple_list)) > length(colnames(df_to_rewrite)) && length(form_base_difference) != 0) {
-    warning("changes in scheme file detected: new inputs form was added")
-    warning("trying to adapt database")
-
-    # add empty data for each new input form
-    for (i in form_base_difference) {
-      df_to_rewrite <- df_to_rewrite |>
-        dplyr::mutate(!!dplyr::sym(i) := utils$get_empty_data(inputs_simple_list[i]))
-    }
-
-    # reorder due to scheme
-    df_to_rewrite <- df_to_rewrite |>
-      dplyr::select(dplyr::all_of(names(inputs_simple_list)))
-
-    DBI::dbWriteTable(con, "main", df_to_rewrite, overwrite = TRUE)
-    DBI::dbExecute(con, "DELETE FROM main WHERE id = 'dummy'")
-  }
-
-  if (length(names(inputs_simple_list)) < length(colnames(df_to_rewrite))) {
-    stop("changes in scheme file detected: some of inputs form was deleted! it may cause data loss!")
-  }
-  # cleaning
-  rm(df_to_rewrite, form_base_difference)
-}
+)
 
 # close connection to prevent data loss
 db$close_db_connection(con)
@@ -281,35 +256,66 @@ server <- function(input, output) {
 
       observeEvent(input[[table_name]], {
 
+        ns <- NS(table_name)
+
+        # данные для данной вложенной формы
         this_inline_table2_info <- inputs_table_df |>
           dplyr::filter(form_id == {table_name})
 
+        # получение имя файла с таблицой
         inline_table2_file_name <- this_inline_table2_info$choices
 
+        # загрузка схемы для данной вложенной формы
         this_inline_table2_scheme <- fs::path(folder_with_schemas, inline_table2_file_name) |>
-          load_scheme_from_xlsx(colnames = c("form_id", "form_label", "form_type"))
+          load_scheme_from_xlsx(colnames = c("subgroup","form_id", "form_label", "form_type"))
 
-        yay_its_fun <- purrr::pmap(
-            .l = dplyr::distinct(this_inline_table2_scheme, form_id, form_label, form_type),
-            .f = utils$render_forms,
-            main_scheme = this_inline_table2_scheme
-          )
+        # # формирование карточек для данной формы
+        # yay_its_fun <- purrr::pmap(
+        #     .l = dplyr::distinct(this_inline_table2_scheme, form_id, form_label, form_type),
+        #     .f = utils$render_forms,
+        #     main_scheme = this_inline_table2_scheme,
+        #     ns = ns
+        #   )
+        yay_its_fun <- purrr::map(
+          .x = unique(this_inline_table2_scheme$subgroup),
+          .f = \(subgroup) {
 
+            subroup_scheme <- this_inline_table2_scheme |>
+              filter(subgroup == {{subgroup}})
+
+            bslib::nav_panel(
+              title = subgroup,
+              purrr::pmap(
+                .l = dplyr::distinct(subroup_scheme, form_id, form_label, form_type),
+                .f = utils$render_forms,
+                main_scheme = subroup_scheme,
+                ns = ns
+              )
+            )
+          }
+        )
+
+        # ui для всплывающего окна 
         ui_for_inline_table <- card(
-            height = "800px",
-            layout_sidebar(
-              sidebar = selectizeInput(
-                inputId = "aboba",
-                label = "key", 
-                choices = c("a", "b")
+            navset_card_underline(
+              sidebar = sidebar(
+                width = 300,
+                selectizeInput(
+                  inputId = "aboba",
+                  label = "key", 
+                  choices = c("a", "b")
+                )
               ),
-              yay_its_fun
+              !!!yay_its_fun
             )
           )
         
+        # проверка данных для внутренних таблиц
+        iv_inner <- data_validation$init_val(this_inline_table2_scheme, ns)
+        iv_inner$enable()
+
         showModal(modalDialog(
           ui_for_inline_table,
-          # title = modalButton("Dismiss"),,
           footer = modalButton("Dismiss"),
           size = "l"
         ))
@@ -320,76 +326,8 @@ server <- function(input, output) {
 
   # VALIDATIONS ============================
   # create new validator
-  iv <- shinyvalidate::InputValidator$new()
-
-  # add rules to all inputs
-  purrr::walk(
-    .x = names(inputs_simple_list),
-    .f = \(x_input_id) {
-      form_type <- inputs_simple_list[[x_input_id]]
-
-      choices <- dplyr::filter(SCHEME_MAIN, form_id == {{x_input_id}}) |>
-        dplyr::pull(choices)
-
-      val_required <- dplyr::filter(SCHEME_MAIN, form_id == {{x_input_id}}) |>
-        dplyr::distinct(required) |>
-        dplyr::pull(required)
-
-      # for `number` type: if in `choices` column has values then parsing them to range validation
-      # value `0; 250` -> transform to rule validation value from 0 to 250
-      if (form_type == "number") {
-
-        iv$add_rule(x_input_id, function(x) {
-          # exit if empty
-          if (check_for_empty_data(x)) {
-            return(NULL)
-          }
-          # check for numeric
-          # if (grepl("^[-]?(\\d*\\,\\d+|\\d+\\,\\d*|\\d+)$", x)) NULL else "Значение должно быть числом."
-          if (grepl("^[+-]?\\d*[\\.|\\,]?\\d+$", x)) NULL else "Значение должно быть числом."
-        })
-
-        # проверка на соответствие диапазону значений
-        if (!is.na(choices)) {
-          # разделить на несколько елементов
-          ranges <- as.integer(stringr::str_split_1(choices, "; "))
-
-          # проверка на кол-во значений
-          if (length(ranges) > 3) {
-            warning("Количество переданных элементов'", x_input_id, "' > 2")
-          } else {
-            iv$add_rule(
-              x_input_id,
-              function(x) {
-
-                # замена разделителя десятичных цифр
-                x <- stringr::str_replace(x, ",", ".")
-
-                # exit if empty
-                if (check_for_empty_data(x)) {
-                  return(NULL)
-                }
-
-                # check for currect value
-                if (between(as.double(x), ranges[1], ranges[2])) {
-                  NULL
-                } else {
-                  glue::glue("Значение должно быть между {ranges[1]} и {ranges[2]}.")
-                }
-              }
-            )
-          }
-        }
-      }
-
-      # if in `required` column value is `1` apply standart validation
-      if (!is.na(val_required) && val_required == 1) {
-        iv$add_rule(x_input_id, shinyvalidate::sv_required(message = "Необходимо заполнить."))
-      }
-    }
-  )
-  # enable validator
-  iv$enable()
+  iv_main <- data_validation$init_val(SCHEME_MAIN)
+  iv_main$enable()
 
   # STATUSES ===============================
   # вывести отображение что что-то не так
@@ -401,8 +339,7 @@ server <- function(input, output) {
   })
 
   output$status_message2 <- renderText({
-    iv$is_valid()
-    # res_auth$admin
+    iv_main$is_valid()
   })
 
   # CREATE RHANDSOME TABLES =====================

@@ -1,11 +1,9 @@
 
-
 #' @description Function check if variable contains some sort of empty data
 #' (NULL, NA, "", other 0-length data) and return `TRUE` (`FALSE` if data is
 #' not 'empty').
 #'
 #' Needed for proper data validation.
-#' (ДУБЛИРУЕТ МОДУЛЬ `data_manipulation`)
 check_for_empty_data <- function(value_to_check) {
 
   # for any 0-length

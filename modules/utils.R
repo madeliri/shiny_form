@@ -50,19 +50,28 @@ render_forms <- function(
   form_id,
   form_label,
   form_type,
-  main_scheme
+  main_scheme,
+  ns
 ) {
 
+  # заготовку для формы (проверка на выходе функции)
   form <- NULL
+
+  # параметры только для этой формы
   filterd_line <- dplyr::filter(main_scheme, form_id == {{form_id}})
 
-  # check if have condition
+  # если передана ns() функция то подмеяем id для каждой формы в соответствии с пространством имен
+  if (!missing(ns)) {
+    form_id <- ns(form_id)
+  }
+
+  # отдельно извлечение параметров условного отображения
   condition <- unique(filterd_line$condition)
 
-  # get choices from schema
+  # элементы выбора 
   choices <- filterd_line$choices
 
-  # get choices from schema
+  # описание 
   description <- unique(filterd_line) |>
     dplyr::filter(!is.na(form_description)) |>
     dplyr::distinct(form_description) |>
@@ -84,12 +93,11 @@ render_forms <- function(
     shiny::tagList(
       if (!is.na(form_label)) {
         shiny::span(form_label, style = "color: #444444; font-weight: 550; line-height: 1.4;")
-        # если в схеме есть поле с описанием - добавлеяем его следующей строчкой
+        # если в схеме есть поле с описанием - добавляем его следующей строчкой
       },
       if (!is.na(description) && !is.na(form_label)) shiny::br(),
       if (!is.na(description)) {
         shiny::span(shiny::markdown(description)) |> htmltools::tagAppendAttributes(style = "color:gray; font-size:small; line-height: 1.4;")
-        # span(description, style = "color:gray; font-size:small;")
       }
     )
   }
@@ -130,7 +138,7 @@ render_forms <- function(
     })
   }
 
-  # еденичный выбор
+  # единичный выбор
   if (form_type == "select_one") {
     form <- shiny::selectizeInput(
       inputId = form_id,
@@ -208,7 +216,8 @@ render_forms <- function(
   if (!is.na(condition)) {
     form <- shiny::conditionalPanel(
       condition = condition,
-      form
+      form,
+      ns = ifelse(missing(ns), shiny::NS(NULL), ns)
     )
   }
 
@@ -227,7 +236,6 @@ get_empty_data <- function(type) {
   if (type %in% c("date")) return(as.Date(NA))
   if (type %in% c("number")) as.character(NA)
 }
-
 
 #' @export
 #' @description Function to update input forms (default variants only)
