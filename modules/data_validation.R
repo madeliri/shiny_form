@@ -15,7 +15,7 @@ init_val <- function(scheme, ns) {
 
   # формируем список id - тип
   inputs_simple_list <- scheme |>
-    dplyr::filter(!form_type %in% c("inline_table", "inline_table2","description", "description_header")) |>
+    dplyr::filter(!form_type %in% c("nested_forms","description", "description_header")) |>
     dplyr::distinct(form_id, form_type) |>
     tibble::deframe()
 
@@ -42,6 +42,8 @@ init_val <- function(scheme, ns) {
           if (check_for_empty_data(x)) {
             return(NULL)
           }
+          # хак для пропуска значений
+          if (x == "NA") return(NULL)
           # check for numeric
           # if (grepl("^[-]?(\\d*\\,\\d+|\\d+\\,\\d*|\\d+)$", x)) NULL else "Значение должно быть числом."
           if (grepl("^[+-]?\\d*[\\.|\\,]?\\d+$", x)) NULL else "Значение должно быть числом."
@@ -60,13 +62,15 @@ init_val <- function(scheme, ns) {
               x_input_id,
               function(x) {
 
-                # замена разделителя десятичных цифр
-                x <- stringr::str_replace(x, ",", ".")
-
                 # exit if empty
                 if (check_for_empty_data(x)) {
                   return(NULL)
                 }
+
+                if (x == "NA") return(NULL)
+
+                # замена разделителя десятичных цифр
+                x <- stringr::str_replace(x, ",", ".")
 
                 # check for currect value
                 if (dplyr::between(as.double(x), ranges[1], ranges[2])) {

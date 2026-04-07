@@ -1,5 +1,6 @@
-### 0.??.?
+### 0.15.0
 ##### features
+- added `description_header` form type;
 - added checkboxes input form;
 - added button to reset data in forms;
 - added option to export input data to `.docx` format (installed pandoc is required), using `reference.docx` template;
@@ -11,9 +12,8 @@
   - in other cases - show warnings;
 
 ##### fixes
-
 - fixed not erasing inputs while loading empty values (with checkboxes, radiobuttons);
-- +number input validation
+- number input validation
 - fix validation errors (2025-03-18);
 - fixes to db work: properly closing connection (2025-03-18);
 
@@ -22,8 +22,8 @@
 - some code refactoring;
 - replacing NumberImput to TextInput due to correct implement validation;
 - added options to enable/disable auth module (disabled on default) (2025-03-17);
-
-
+- (breaking) replacing inner_tables (via `rhandsometable`) with nested_forms (rendering by shiny modal dialog feature)
+- (breaking) renaming `main.xlsx` to `schema.xlsx`, schemas for nested forms now in seperate sheets in this file;
 
 ### 0.14.1 2024-10-14
 

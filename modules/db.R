@@ -38,11 +38,25 @@ check_if_table_is_exist_and_init_if_not <- function(
 
   } else {
 
-    dummy_df <- dplyr::mutate(get_dummy_df(forms_id_type_list), id = "dummy")
+    if (table_name == "main") {
+      dummy_df <- dplyr::mutate(
+        get_dummy_df(forms_id_type_list), 
+        main_key = "dummy",
+        .before = 1
+      )
+    }
+    if (table_name != "main") {
+      dummy_df <- get_dummy_df(forms_id_type_list) |>
+        dplyr::mutate(
+          main_key = "dummy",
+          nested_key = "dummy",
+          .before = 1
+        )
+    }
 
     # write dummy df into base, then delete dummy row
     DBI::dbWriteTable(con, table_name, dummy_df, append = TRUE)
-    DBI::dbExecute(con, "DELETE FROM main WHERE id = 'dummy'")
+    DBI::dbExecute(con, glue::glue("DELETE FROM {table_name} WHERE main_key = 'dummy'"))
 
     cli::cli_alert_success("таблица '{table_name}' успешно создана")
   }
@@ -86,34 +100,43 @@ compare_existing_table_with_schema <- function(
   con = rlang::env_get(rlang::caller_env(), nm = "con")
 ) {
 
+  forms_id_type_list_names <- names(forms_id_type_list)
+
+  if (table_name == "main") {
+    forms_id_type_list_names <- c("main_key", forms_id_type_list_names)
+  } else {
+    forms_id_type_list_names <- c("main_key", "nested_key", forms_id_type_list_names)
+  }
+
   options(box.path = here::here())
   box::use(modules/utils)
 
   # checking if db structure in form compatible with alrady writed data (in case on changig form)
-  if (identical(colnames(DBI::dbReadTable(con, table_name)), names(forms_id_type_list))) {
+  if (identical(colnames(DBI::dbReadTable(con, table_name)), forms_id_type_list_names)) {
     # ...
   } else {
 
     df_to_rewrite <- DBI::dbReadTable(con, table_name)
-    form_base_difference <- setdiff(names(forms_id_type_list), colnames(df_to_rewrite))
-    base_form_difference <- setdiff(colnames(df_to_rewrite), names(forms_id_type_list))
+    form_base_difference <- setdiff(forms_id_type_list_names, colnames(df_to_rewrite))
+    base_form_difference <- setdiff(colnames(df_to_rewrite), forms_id_type_list_names)
 
     # if lengths are equal
-    if (length(names(forms_id_type_list)) == length(colnames(df_to_rewrite)) &&
+    if (length(forms_id_type_list_names) == length(colnames(df_to_rewrite)) &&
           length(form_base_difference) == 0 &&
           length(base_form_difference) == 0) {
-      warning("changes in scheme file detected: assuming order changed only")
+      cli::cli_warn("changes in scheme file detected: assuming order changed only")
+      print(forms_id_type_list_names)
     }
 
-    if (length(names(forms_id_type_list)) == length(colnames(df_to_rewrite)) &&
+    if (length(forms_id_type_list_names) == length(colnames(df_to_rewrite)) &&
           length(form_base_difference) != 0 &&
           length(base_form_difference) != 0) {
-      stop("changes in scheme file detected: structure has been changed")
+      cli::cli_abort("changes in scheme file detected: structure has been changed")
     }
 
-    if (length(names(forms_id_type_list)) > length(colnames(df_to_rewrite)) && length(form_base_difference) != 0) {
-      warning("changes in scheme file detected: new inputs form was added")
-      warning("trying to adapt database")
+    if (length(forms_id_type_list_names) > length(colnames(df_to_rewrite)) && length(form_base_difference) != 0) {
+      cli::cli_warn("changes in scheme file detected: new inputs form was added")
+      cli::cli_warn("trying to adapt database")
 
       # add empty data for each new input form
       for (i in form_base_difference) {
@@ -123,15 +146,76 @@ compare_existing_table_with_schema <- function(
 
       # reorder due to scheme
       df_to_rewrite <- df_to_rewrite |>
-        dplyr::select(dplyr::all_of(names(forms_id_type_list)))
+        dplyr::select(dplyr::all_of(forms_id_type_list_names))
 
       DBI::dbWriteTable(con, table_name, df_to_rewrite, overwrite = TRUE)
-      DBI::dbExecute(con, "DELETE FROM main WHERE id = 'dummy'")
+      DBI::dbExecute(con, glue::glue("DELETE FROM {table_name} WHERE main_key = 'dummy'"))
     }
 
-    if (length(names(forms_id_type_list)) < length(colnames(df_to_rewrite))) {
-      stop("changes in scheme file detected: some of inputs form was deleted! it may cause data loss!")
+    if (length(forms_id_type_list_names) < length(colnames(df_to_rewrite))) {
+      cli::cli_abort("changes in scheme file detected: some of inputs form was deleted! it may cause data loss!")
     }
     
   }
+}
+
+#' @export
+write_df_to_db <- function(df, table_name, main_key, nested_key, con) {
+
+  # if(!missing(nested_key)) del_query <- glue::glue("DELETE FROM {table_name} WHERE key = '{key}'")
+  if (table_name == "main") {
+    del_query <- glue::glue("DELETE FROM main WHERE main_key = '{main_key}'")
+    DBI::dbExecute(con, del_query)
+  }
+
+  if (table_name != "main") {
+    del_query <- glue::glue("DELETE FROM '{table_name}' WHERE main_key = '{main_key}' AND nested_key = '{nested_key}'")
+    DBI::dbExecute(con, del_query)
+  }
+
+  # записать данные
+  DBI::dbWriteTable(con, table_name, df, append = TRUE)
+
+  # report
+  cli::cli_alert_success("данные для '{main_key}' в таблице '{table_name}' успешно обновлены")
+
+}
+
+#' @export
+#' reading tables from db by name and id ========
+read_df_from_db_by_id <- function(table_name, main_key, nested_key, con) {
+
+  # check if this table exist
+  if (table_name == "main") {
+    query <- glue::glue("
+      SELECT * 
+      FROM main
+      WHERE main_key = '{main_key}'
+    ")
+  }
+
+  if (table_name != "main") {
+    query <- glue::glue("
+      SELECT * 
+      FROM {table_name}
+      WHERE main_key = '{main_key}' AND nested_key = '{nested_key}'
+    ")
+  }
+  DBI::dbGetQuery(con, query)
+}
+
+#' @export
+get_keys_from_table <- function(table_name, con) {
+
+  DBI::dbGetQuery(con, glue::glue("SELECT DISTINCT main_key FROM {table_name}")) |>
+    dplyr::pull()
+
+}
+
+#' @export
+get_nested_keys_from_table <- function(table_name, main_key, con) {
+
+  DBI::dbGetQuery(con, glue::glue("SELECT DISTINCT nested_key FROM {table_name} WHERE main_key == '{main_key}'")) |>
+    dplyr::pull()
+
 }

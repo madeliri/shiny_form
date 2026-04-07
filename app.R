@@ -1,13 +1,13 @@
 suppressPackageStartupMessages({
   library(DBI)
-  library(RSQLite)
+  # library(RSQLite)
   library(tidyr)
   library(dplyr)
   library(purrr)
   library(magrittr)
   library(shiny)
   library(bslib)
-  library(rhandsontable)
+  # library(rhandsontable)
   library(shinymanager)
 })
 
@@ -20,7 +20,7 @@ source("helpers/functions.R")
 config <- config::get(file = "configs/config.yml")
 
 folder_with_schemas <- fs::path("configs/schemas")
-FILE_SCHEME         <- fs::path(folder_with_schemas, "main.xlsx")
+FILE_SCHEME         <- fs::path(folder_with_schemas, "schema.xlsx")
 # dbfile              <- fs::path("data.sqlite")
 
 # options(box.path = getwd())
@@ -31,6 +31,8 @@ box::use(
   modules/db,
   modules/data_validation
 )
+
+global_options$set_global_options()
 
 # SETTINGS ================================
 AUTH_ENABLED <- config$auth_module
@@ -43,11 +45,11 @@ rmarkdown::find_pandoc(dir = "/opt/homebrew/bin/")
 if (!rmarkdown::pandoc_available()) warning("Can't find pandoc!")
 
 load_scheme_from_xlsx <- function(
-  filename,
+  sheet_name,
   colnames = c("part", "subgroup", "form_id", "form_label", "form_type")
 ) {
 
-  readxl::read_xlsx(filename) |>
+  readxl::read_xlsx(FILE_SCHEME, sheet = sheet_name) |>
     # fill NA down
     tidyr::fill(all_of(colnames), .direction = "down") |>
     dplyr::group_by(form_id) |>
@@ -56,51 +58,74 @@ load_scheme_from_xlsx <- function(
 
 }
 
-extract_forms_id_and_types_from_scheme <- function(scheme) {
-  scheme |>
-    dplyr::filter(!form_type %in% c("inline_table", "inline_table2","description", "description_header")) |>
+extract_forms_id_and_types_from_scheme <- function(scheme, key = c("main_key", "nested_key")) {
+
+  key <- match.arg(key)
+
+  form_id_and_types_list <- scheme |>
+    dplyr::filter(!form_type %in% c("inline_table", "nested_forms","description", "description_header")) |>
     dplyr::distinct(form_id, form_type) |>
     tibble::deframe()
+
+  if(!key %in% names(form_id_and_types_list)) cli::cli_abort("в схеме должно быть поле с ключем (key)")
+  form_id_and_types_list[names(form_id_and_types_list) != key]
+
 }
 
 # SCHEME_MAIN UNPACK ==========================
 # load scheme
-SCHEME_MAIN <- load_scheme_from_xlsx(FILE_SCHEME)
+SCHEME_MAIN <- load_scheme_from_xlsx("main")
 
 # get list of simple inputs
-inputs_simple_list <- extract_forms_id_and_types_from_scheme(SCHEME_MAIN)
+main_id_and_types_list <- extract_forms_id_and_types_from_scheme(SCHEME_MAIN)
 
-# get list of inputs with inline tables
-inputs_tables_list <- SCHEME_MAIN |>
-  dplyr::filter(form_type == "inline_table") |>
-  dplyr::distinct(form_id) |>
-  tibble::deframe()
+# # get list of inputs with inline tables
+# inputs_tables_list <- SCHEME_MAIN |>
+#   dplyr::filter(form_type == "inline_table") |>
+#   dplyr::distinct(form_id) |>
+#   tibble::deframe()
 
-inputs_table_df <- SCHEME_MAIN |>
-  dplyr::filter(form_type == "inline_table2") |>
+# 
+nested_forms_df <- SCHEME_MAIN |>
+  dplyr::filter(form_type == "nested_forms") |>
   dplyr::distinct(form_id, .keep_all = TRUE)
+
+# лист со схемами для всех вложенных формы
+nested_forms_schemas_list <- purrr::map(
+
+  .x = purrr::set_names(unique(nested_forms_df$form_id)),
+  .f = \(nested_form_id) {
+
+    nested_form_scheme_sheet_name <- nested_forms_df |>
+      dplyr::filter(form_id == {nested_form_id}) |>
+      dplyr::pull(choices)
+
+    # загрузка схемы для данной вложенной формы
+    load_scheme_from_xlsx(nested_form_scheme_sheet_name, colnames = c("subgroup","form_id", "form_label", "form_type"))
+
+  }
+)
 
 # establish connection
 con <- db$make_db_connection()
 
 # init DB (write dummy data to "main" table)
-db$check_if_table_is_exist_and_init_if_not("main", inputs_simple_list)
+db$check_if_table_is_exist_and_init_if_not("main", main_id_and_types_list)
 
 purrr::walk(
-  .x = unique(inputs_table_df$form_id),
+  .x = unique(nested_forms_df$form_id),
   .f = \(table_name) {
 
-    this_inline_table2_info <- inputs_table_df |>
+    this_inline_table2_info <- nested_forms_df |>
       dplyr::filter(form_id == {table_name})
 
     # получение имя файла с таблицой
-    inline_table2_file_name <- this_inline_table2_info$choices
+    nested_form_scheme_sheet_name <- this_inline_table2_info$choices
 
     # загрузка схемы для данной вложенной формы
-    this_inline_table2_scheme <- fs::path(folder_with_schemas, inline_table2_file_name) |>
-      load_scheme_from_xlsx(colnames = c("subgroup","form_id", "form_label", "form_type"))
+    this_nested_form_scheme <- load_scheme_from_xlsx(nested_form_scheme_sheet_name, colnames = c("subgroup","form_id", "form_label", "form_type"))
 
-    this_table_id_and_types_list <- extract_forms_id_and_types_from_scheme(this_inline_table2_scheme)
+    this_table_id_and_types_list <- extract_forms_id_and_types_from_scheme(this_nested_form_scheme, "nested_key")
 
     db$check_if_table_is_exist_and_init_if_not(
       table_name,
@@ -114,38 +139,37 @@ purrr::walk(
 # close connection to prevent data loss
 db$close_db_connection(con)
 
+# # INLINE TABLES =====================
+# # создаем для каждой таблицы объект
+# inline_tables <- purrr::map(
+#   .x = purrr::set_names(inputs_tables_list),
+#   .f = \(x_inline_table_name) {
 
-# INLINE TABLES =====================
-# создаем для каждой таблицы объект
-inline_tables <- purrr::map(
-  .x = purrr::set_names(inputs_tables_list),
-  .f = \(x_inline_table_name) {
+#     # получить имя файла со схемой
+#     file_name <- SCHEME_MAIN |>
+#       dplyr::filter(form_id == x_inline_table_name) |>
+#       dplyr::pull(choices)
 
-    # получить имя файла со схемой
-    file_name <- SCHEME_MAIN |>
-      dplyr::filter(form_id == x_inline_table_name) |>
-      dplyr::pull(choices)
+#     # load scheme
+#     schemaaa <- readxl::read_xlsx(fs::path(folder_with_schemas, file_name)) |>
+#       tidyr::fill(dplyr::everything(), .direction = "down")
 
-    # load scheme
-    schemaaa <- readxl::read_xlsx(fs::path(folder_with_schemas, file_name)) |>
-      tidyr::fill(dplyr::everything(), .direction = "down")
+#     # список форм в схеме
+#     inline_forms <- schemaaa |>
+#       dplyr::distinct(form_id) |>
+#       dplyr::pull()
 
-    # список форм в схеме
-    inline_forms <- schemaaa |>
-      dplyr::distinct(form_id) |>
-      dplyr::pull()
+#     # макет таблицы (пустой)
+#     DF_gen <- as.list(setNames(rep(as.character(NA), length(inline_forms)), inline_forms)) |>
+#       as.data.frame()
 
-    # макет таблицы (пустой)
-    DF_gen <- as.list(setNames(rep(as.character(NA), length(inline_forms)), inline_forms)) |>
-      as.data.frame()
+#     # make 12 more empty rows
+#     DF_gen <- rbind(DF_gen, DF_gen[rep(1, 12), ])
+#     rownames(DF_gen) <- NULL
 
-    # make 12 more empty rows
-    DF_gen <- rbind(DF_gen, DF_gen[rep(1, 12), ])
-    rownames(DF_gen) <- NULL
-
-    list(schema = schemaaa, df_empty = DF_gen)
-  }
-)
+#     list(schema = schemaaa, df_empty = DF_gen)
+#   }
+# )
 
 # generate nav panels for each page
 nav_panels_list <- purrr::map(
@@ -154,6 +178,7 @@ nav_panels_list <- purrr::map(
 
     # отделить схему для каждой страницы
     this_page_panels_scheme <- SCHEME_MAIN |>
+      dplyr::filter(!form_id %in% c("main_key", "nested_key")) |>
       dplyr::filter(part == {{page_name}})
 
     this_page_panels <- utils$make_panels(this_page_panels_scheme)
@@ -171,6 +196,7 @@ ui <- page_sidebar(
   title = config$header,
   theme = bs_theme(version = 5, preset = "bootstrap"),
   sidebar = sidebar(
+    actionButton("add_new_main_key_button", "ДОБАВИТЬ ЧТО_ТО", icon("floppy-disk", lib = "font-awesome")),
     actionButton("save_data_button", "Сохранить данные", icon("floppy-disk", lib = "font-awesome")),
     actionButton("clean_data_button", "Очистить данные", icon("user-plus", lib = "font-awesome")),
     textOutput("status_message"),
@@ -183,6 +209,7 @@ ui <- page_sidebar(
   ),
   # list of rendered panels
   navset_card_underline(
+    id = "main",
     !!!nav_panels_list,
     header = NULL
   )
@@ -200,34 +227,12 @@ modal_clean_all <- modalDialog(
   easyClose = TRUE
 )
 
-# окно для подвтерждения удаления
-modal_overwrite <- modalDialog(
-  "Запись с данным id уже существует в базе. Это действие перезапишет сохраненные ранее данные.",
-  title = "Перезаписать данные?",
-  footer = tagList(
-    actionButton("cancel_button", "Отмена"),
-    actionButton("data_save", "Перезаписать", class = "btn btn-danger")
-  ),
-  easyClose = TRUE
-)
-
-# окно для подвтерждения удаления
-modal_load_patients <- modalDialog(
-  "Загрузить данные",
-  uiOutput("load_menu"),
-  title = "Загрузить имеющиеся данные",
-  footer = tagList(
-    actionButton("cancel_button", "Отмена", class = "btn btn-danger"),
-    actionButton("read_data", "Загрузить данные"),
-  ),
-  easyClose = TRUE
-)
 
 # init auth =======================
 if (AUTH_ENABLED) ui <- shinymanager::secure_app(ui, enable_admin = TRUE)
 
 # SERVER LOGIC =============================
-server <- function(input, output) {
+server <- function(input, output, session) {
   # AUTH SETUP ========================================
   if (AUTH_ENABLED) {
     # check_credentials directly on sqlite db
@@ -246,234 +251,92 @@ server <- function(input, output) {
 
   # REACTIVE VALUES =================================
   # Create a reactive values object to store the input data
-  values <- reactiveValues(data = NULL)
+  values <- reactiveValues(
+    data = NULL,
+    main_key = NULL,
+    nested_key = NULL,
+    nested_form_id = NULL,
+    nested_id_and_types = NULL
+  )
   rhand_tables <- reactiveValues()
 
-  # inline tables 2 ========================
-  purrr::walk(
-    .x = inputs_table_df$form_id,
-    .f = \(table_name) {
+  # ==========================================
+  # ОБЩИЕ ФУНКЦИИ ============================
+  # ==========================================
 
-      observeEvent(input[[table_name]], {
+  ## перенос данных из датафрейма в форму -----------------------
+  load_data_to_form <- function(df, id_and_types_list, ns) {
 
-        ns <- NS(table_name)
+    input_types <- unname(id_and_types_list)
+    input_ids   <- names(id_and_types_list)
+    if (missing(ns)) ns <- NULL
 
-        # данные для данной вложенной формы
-        this_inline_table2_info <- inputs_table_df |>
-          dplyr::filter(form_id == {table_name})
+    # transform df to list
+    loaded_df_for_id <- as.list(df)
+    loaded_df_for_id <- df[input_ids]
 
-        # получение имя файла с таблицой
-        inline_table2_file_name <- this_inline_table2_info$choices
-
-        # загрузка схемы для данной вложенной формы
-        this_inline_table2_scheme <- fs::path(folder_with_schemas, inline_table2_file_name) |>
-          load_scheme_from_xlsx(colnames = c("subgroup","form_id", "form_label", "form_type"))
-
-        # # формирование карточек для данной формы
-        # yay_its_fun <- purrr::pmap(
-        #     .l = dplyr::distinct(this_inline_table2_scheme, form_id, form_label, form_type),
-        #     .f = utils$render_forms,
-        #     main_scheme = this_inline_table2_scheme,
-        #     ns = ns
-        #   )
-        yay_its_fun <- purrr::map(
-          .x = unique(this_inline_table2_scheme$subgroup),
-          .f = \(subgroup) {
-
-            subroup_scheme <- this_inline_table2_scheme |>
-              filter(subgroup == {{subgroup}})
-
-            bslib::nav_panel(
-              title = subgroup,
-              purrr::pmap(
-                .l = dplyr::distinct(subroup_scheme, form_id, form_label, form_type),
-                .f = utils$render_forms,
-                main_scheme = subroup_scheme,
-                ns = ns
-              )
-            )
-          }
-        )
-
-        # ui для всплывающего окна 
-        ui_for_inline_table <- card(
-            navset_card_underline(
-              sidebar = sidebar(
-                width = 300,
-                selectizeInput(
-                  inputId = "aboba",
-                  label = "key", 
-                  choices = c("a", "b")
-                )
-              ),
-              !!!yay_its_fun
-            )
-          )
-        
-        # проверка данных для внутренних таблиц
-        iv_inner <- data_validation$init_val(this_inline_table2_scheme, ns)
-        iv_inner$enable()
-
-        showModal(modalDialog(
-          ui_for_inline_table,
-          footer = modalButton("Dismiss"),
-          size = "l"
-        ))
-
-      })
-    }
-  )
-
-  # VALIDATIONS ============================
-  # create new validator
-  iv_main <- data_validation$init_val(SCHEME_MAIN)
-  iv_main$enable()
-
-  # STATUSES ===============================
-  # вывести отображение что что-то не так
-  output$status_message <- renderText({
-    shiny::validate(
-      need(input$id, "⚠️ Необходимо указать id пациента!")
-    )
-    paste0("ID: ", input$id)
-  })
-
-  output$status_message2 <- renderText({
-    iv_main$is_valid()
-  })
-
-  # CREATE RHANDSOME TABLES =====================
-  # записать массив пустых табличек в rhands_tables
-  purrr::walk(
-    .x = purrr::set_names(inputs_tables_list),
-    .f = \(x_inline_table) {
-      rhand_tables[[x_inline_table]] <- inline_tables[[x_inline_table]]$df_empty
-    }
-  )
-
-  # render tables
-  observe({
-    # MESSAGE
-    purrr::walk(
-      .x = inputs_tables_list,
-      .f = \(x) {
-        # вытаскиваем схемы из заготовленного ранее списка
-        schema <- inline_tables[[x]]$schema
-
-        # убрать дубликаты
-        schema_comp <- schema |>
-          dplyr::distinct(form_id, form_label, form_type)
-
-        # заголовки
-        headers <- dplyr::pull(schema_comp, form_label)
-
-        # fixes empty rows error
-        rownames(rhand_tables[[x]]) <- NULL
-
-        # создать объект рандсонтебл
-        rh_tabel <- rhandsontable::rhandsontable(
-          rhand_tables[[x]],
-          colHeaders = headers,
-          rowHeaders = NULL,
-          height = 400,
-        ) |>
-          rhandsontable::hot_cols(
-            colWidths = 120,
-            manualColumnResize = TRUE,
-            columnSorting = TRUE
-          )
-
-        # циклом итерируемся по индексу;
-        for (i in seq(1, length(schema_comp$form_id))) {
-          # получаем информацию о типе столбца
-          type <- dplyr::filter(schema_comp, form_id == schema_comp$form_id[i]) |>
-            dplyr::pull(form_type)
-
-          # информация о воможных вариантнах выбора
-          choices <- dplyr::filter(schema, form_id == schema_comp$form_id[i]) |>
-            dplyr::pull(choices)
-
-          ## проверки
-          # текстовое поле
-          if (type == "text") {
-            rh_tabel <- rh_tabel |>
-              hot_col(col = headers[i], type = "autocomplete")
-          }
-
-          # выбор из списка
-          if (type == "select_one") {
-            rh_tabel <- rh_tabel |>
-              hot_col(col = headers[i], type = "dropdown", source = choices)
-          }
-
-          # дата
-          if (type == "date") {
-            rh_tabel <- rh_tabel |>
-              hot_col(col = headers[i], type = "date", dateFormat = "DD.MM.YYYY", language = "ru-RU")
-          }
-        }
-
-        # передаем в оутпут полученный объект
-        output[[x]] <- renderRHandsontable({
-          rh_tabel
-        })
-      }
-    )
-  })
-
-
-  # BUTTONS LOGIC ======================
-  ## clear all inputs ==================
-  # show modal on click of button
-  observeEvent(input$clean_data_button, {
-    showModal(modal_clean_all)
-  })
-
-  # when action confirm - perform action
-  observeEvent(input$clean_all_action, {
-    # rewrite all inputs with empty data
+    # rewrite input forms
     purrr::walk2(
-      .x = inputs_simple_list,
-      .y = names(inputs_simple_list),
+      .x = input_types,
+      .y = input_ids,
       .f = \(x_type, x_id) {
-        # using function to update forms
+
+        # updating forms with loaded data
         utils$update_forms_with_data(
-          id = x_id,
-          type = x_type,
-          value = utils$get_empty_data(x_type)
+          form_id = x_id,
+          form_type = x_type,
+          value = df[[x_id]],
+          ns = ns
         )
       }
     )
 
     # inline tables
-    purrr::walk(
-      .x = inputs_tables_list,
-      .f = \(x_table_name) {
-        rhand_tables[[x_table_name]] <- inline_tables[[x_table_name]]$df_empty
-      }
-    )
+    # purrr::walk(
+    #   .x = inputs_tables_list,
+    #   .f = \(x_table_name) {
+    #     loaded_df_for_id <- read_df_from_db_by_id(x_table_name, con)
 
-    removeModal()
-    showNotification("Данные очищены!", type = "warning")
-  })
+    #     # если табличечки не пустые загружаем их
+    #     if (!is.null(loaded_df_for_id) && nrow(loaded_df_for_id) != 0) {
+    #       rhand_tables[[x_table_name]] <- subset(loaded_df_for_id, select = c(-key))
+    #     } else {
+    #       rhand_tables[[x_table_name]] <- inline_tables[[x_table_name]]$df_empty
+    #     }
+    #   }
+    # )
 
-  ## saving inputs to db ========================
-  # сохранить простые данные;
-  observeEvent(input$save_data_button, {
-    req(input$id)
-    con <- db$make_db_connection("save_data_button")
-    on.exit(db$close_db_connection(con, "save_data_button"), add = TRUE)
+    # showNotification("Данные загружены!", type = "message")
+    # cli::cli_alert_success("данные для '{main_key}' из таблицы {table_name} успешно загружены")
 
-    ## MAIN
+    # log_action_to_db("load", main_key, con = con)
+  }
+
+  ## сохранение данных из форм в базу данных --------
+  save_inputs_to_db <- function(
+    table_name, 
+    id_and_types_list, 
+    ns, 
+    con
+  ) {
+    
+    input_types <- unname(id_and_types_list)
+    input_ids   <- names(id_and_types_list)
+
+    if (missing(ns)) ns <- NULL
+  
     # собрать все значения по введенным данным;
-    result_df <- purrr::map(
-      .x = names(inputs_simple_list),
-      .f = \(x) {
-        input_d <- input[[x]]
+    exported_values <- purrr::map2(
+      .x = input_ids,
+      .y = input_types,
+      .f = \(x_id, x_type) {
+
+        if (!is.null(ns)) x_id <- ns(x_id)
+        input_d <- input[[x_id]]
 
         # return empty if 0 element
         if (length(input_d) == 0) {
-          return(utils$get_empty_data(inputs_simple_list[[x]]))
+          return(utils$get_empty_data(x_type))
         }
         # return element if there one
         if (length(input_d) == 1) {
@@ -484,51 +347,448 @@ server <- function(input, output) {
       }
     )
 
-    # make dataframe from that;
-    values$data <- setNames(result_df, names(inputs_simple_list)) %>%
-      as_tibble()
+    exported_df <- setNames(exported_values, input_ids) |>
+        as_tibble()
 
-    if (length(DBI::dbListTables(con)) == 0) {
-      # если база пустая, то просто записываем данные
-      write_all_to_db()
-    } else if ("main" %in% DBI::dbListTables(con)) {
-      # если главная таблица существует, то проверяем существование id
+    # пайплайн для главной таблицы
+    if (table_name == "main") {
+      exported_df <- exported_df |>
+        mutate(
+          main_key = values$main_key,
+          .before = 1
+        )
+    }
 
-      # GET DATA files
-      query <- glue::glue_sql("
-        SELECT DISTINCT id
-        FROM main
-        WHERE id = {input$id}
-        ", .con = con)
+    # для всех остальных таблицы (вложенные)
+    if (table_name != "main") {
+      exported_df <- exported_df |>
+        mutate(
+          main_key   = values$main_key,
+          nested_key = values$nested_key,
+          .before = 1
+        )
+    }
 
-      # получаем список записей с данным id
-      exist_main_df <- DBI::dbGetQuery(con, query)
+    # если данных нет - просто записать данные
+    log_action_to_db("save", values$main_key, con)
 
-      # проверка по наличию записей с данным ID в базе;
-      if (nrow(exist_main_df) == 0) {
-        # если данных нет - просто записать данные
-        log_action_to_db("save", input$id, con)
-        write_all_to_db()
-      } else {
-        # если есть выдать окно с подтверждением перезаписи
-        showModal(modal_overwrite)
+    db$write_df_to_db(
+      df = exported_df,
+      table_name = table_name,
+      main_key = values$main_key,
+      nested_key = values$nested_key,
+      con = con
+    )
+  }
+
+  # ====================================
+  # NESTED FORMS =======================
+  # ====================================
+  ## кнопки для каждой вложенной таблицы -------------------------------
+  purrr::walk(
+    .x = nested_forms_df$form_id,
+    .f = \(nested_form_id) {
+
+      observeEvent(input[[nested_form_id]], {
+        req(values$main_key)
+
+        con <- db$make_db_connection("nested_tables")
+        on.exit(db$close_db_connection(con, "nested_tables"), add = TRUE)
+
+        values$nested_form_id <- nested_form_id
+        values$nested_key <- NULL # для нормальной работы реактивных значений
+
+        show_modal_for_nested_form(con)
+
+      })
+    }
+  )
+
+  ## функция отображения вложенной формы для выбранной таблицы --------
+  show_modal_for_nested_form <- function(con) {
+
+    ns <- NS(values$nested_form_id)
+
+    # загрузка схемы для данной вложенной формы
+    this_nested_form_scheme <- nested_forms_schemas_list[[values$nested_form_id]]
+
+    values$nested_id_and_types <- extract_forms_id_and_types_from_scheme(this_nested_form_scheme, "nested_key")
+
+    # выбираем все ключи из баз данных
+    kyes_for_this_table <- db$get_nested_keys_from_table(values$nested_form_id, values$main_key, con)
+    kyes_for_this_table <- unique(c(values$nested_key, kyes_for_this_table))
+    values$nested_key <- kyes_for_this_table[[1]]
+
+    # nested ui
+    yay_its_fun <- purrr::map(
+      .x = unique(this_nested_form_scheme$subgroup),
+      .f = \(subgroup) {
+
+        subroup_scheme <- this_nested_form_scheme |>
+          dplyr::filter(subgroup == {{subgroup}}) |>
+          dplyr::filter(!form_id %in% c("main_key", "nested_key"))
+
+        bslib::nav_panel(
+          title = subgroup,
+          purrr::pmap(
+            .l = dplyr::distinct(subroup_scheme, form_id, form_label, form_type),
+            .f = utils$render_forms,
+            main_scheme = subroup_scheme,
+            ns = ns
+          )
+        )
       }
+    )
+
+    # ui для всплывающего окна 
+    ui_for_inline_table <- navset_card_underline(
+        sidebar = sidebar(
+          width = 300,
+          selectizeInput(
+            inputId = "nested_key_selector",
+            label = "nested_key label", 
+            choices = kyes_for_this_table,
+            selected = values$nested_key,
+            # options = list(placeholder = "действие комиссии", create = FALSE, onInitialize = I('function() { this.setValue(""); }'))
+          ),
+          actionButton("add_new_nested_key_button", "add"),
+          actionButton("nested_form_save_button", "save")
+        ),
+        !!!yay_its_fun
+      )
+
+
+    # проверка данных для внутренних таблиц
+    iv_inner <- data_validation$init_val(this_nested_form_scheme, ns)
+    iv_inner$enable()
+
+    showModal(modalDialog(
+      ui_for_inline_table,
+      footer = actionButton("nested_form_close_button", "Закрыть"),
+      size = "l"
+    ))
+  }
+
+  observeEvent(input$nested_form_close_button, {
+    removeModal()
+  })
+
+  ## сохранение данных из вложенной формы ---------------
+  observeEvent(input$nested_form_save_button, {
+    req(values$nested_form_id)
+
+    con <- db$make_db_connection("nested_form_save_button")
+    on.exit(db$close_db_connection(con, "nested_form_save_button"), add = TRUE)
+
+    # сохраняем данные основной формы!!!
+    save_inputs_to_db(
+      table_name        = "main",
+      id_and_types_list = main_id_and_types_list,
+      con               = con
+    )
+
+    # сохраняем данные текущей вложенной таблицы
+    save_inputs_to_db(
+      table_name        = values$nested_form_id,
+      id_and_types_list = values$nested_id_and_types,
+      ns                = NS(values$nested_form_id),
+      con = con
+    )
+
+    showNotification(
+      "Данные успешно сохраннены",
+      type = "message"
+    )
+  })
+
+  ## обновление данных при переключении ключей ------------
+  observeEvent(input$nested_key_selector, {
+    req(input$nested_key_selector)
+    req(values$main_key)
+
+    # выбранный ключ в форме - перемещаем в RV
+    values$nested_key <- input$nested_key_selector
+
+  })
+
+  observeEvent(values$nested_key, {
+    
+    con <- db$make_db_connection("nested_tables")
+    on.exit(db$close_db_connection(con, "nested_tables"), add = TRUE)
+
+    kyes_for_this_table <- db$get_nested_keys_from_table(values$nested_form_id, values$main_key, con)
+
+    if (values$nested_key %in% kyes_for_this_table) {
+
+      # выгрузка датафрейма по общим и вложенным ключам
+      df <- db$read_df_from_db_by_id(
+        table_name = values$nested_form_id, 
+        main_key = values$main_key,
+        nested_key = values$nested_key,
+        con = con
+      )
+
+      # загрузка данных в формы
+      load_data_to_form(
+        df                = df,
+        id_and_types_list = values$nested_id_and_types,
+        ns                = NS(values$nested_form_id)
+      )
     }
   })
 
-  ## get list of id's from db =====================
+  ## добавление нового вложенного ключа -------------------
+  observeEvent(input$add_new_nested_key_button, {
+
+    removeModal()
+
+    # та самая форма для ключа
+    scheme_for_key_input <- nested_forms_schemas_list[[values$nested_form_id]] |>
+      dplyr::filter(form_id %in% c("nested_key"))
+
+    ui1 <- rlang::exec(
+      .fn = utils$render_forms, 
+      !!!distinct(scheme_for_key_input, form_id, form_label, form_type),
+      main_scheme = scheme_for_key_input
+    )
+
+    showModal(modalDialog(
+      title = "Создать новую запись",
+      ui1,
+      footer = tagList(
+        actionButton("confirm_create_new_nested_key", "Создать")
+      ),
+      easyClose = TRUE
+    ))
+
+  })
+
+  # действие при подтверждении создания новой записи
+  observeEvent(input$confirm_create_new_nested_key, {
+    req(input$nested_key)
+
+    con <- db$make_db_connection("confirm_create_new_key")
+    on.exit(db$close_db_connection(con, "confirm_create_new_key"), add = TRUE)
+
+    existed_key <- db$get_nested_keys_from_table(
+      table_name = values$nested_form_id, 
+      main_key = values$main_key, 
+      con
+    )
+
+    if (input$nested_key %in% existed_key) {
+      showNotification(
+        sprintf("В базе уже запись с данным ключем."),
+        type = "error"
+      )
+      return()
+    }
+    
+    values$nested_key <- input$nested_key
+    utils$clean_forms(values$nested_id_and_types, NS(values$nested_form_id))
+    removeModal()
+    show_modal_for_nested_form(con)
+
+  })
+
+  # VALIDATIONS ============================
+  # create new validator
+  iv_main <- data_validation$init_val(SCHEME_MAIN)
+  iv_main$enable()
+
+  # STATUSES ===============================
+  # вывести отображение что что-то не так
+  output$status_message <- renderText({
+    shiny::validate(
+      need(values$main_key, "⚠️ Необходимо указать id пациента!")
+    )
+    paste0("ID: ", values$main_key)
+  })
+
+  output$status_message2 <- renderText({
+    iv_main$is_valid()
+  })
+
+  # CREATE RHANDSOME TABLES =====================
+  # записать массив пустых табличек в rhands_tables
+  # purrr::walk(
+  #   .x = purrr::set_names(inputs_tables_list),
+  #   .f = \(x_inline_table) {
+  #     rhand_tables[[x_inline_table]] <- inline_tables[[x_inline_table]]$df_empty
+  #   }
+  # )
+
+  # # render tables
+  # observe({
+  #   # MESSAGE
+  #   purrr::walk(
+  #     .x = inputs_tables_list,
+  #     .f = \(x) {
+  #       # вытаскиваем схемы из заготовленного ранее списка
+  #       schema <- inline_tables[[x]]$schema
+
+  #       # убрать дубликаты
+  #       schema_comp <- schema |>
+  #         dplyr::distinct(form_id, form_label, form_type)
+
+  #       # заголовки
+  #       headers <- dplyr::pull(schema_comp, form_label)
+
+  #       # fixes empty rows error
+  #       rownames(rhand_tables[[x]]) <- NULL
+
+  #       # создать объект рандсонтебл
+  #       rh_tabel <- rhandsontable::rhandsontable(
+  #         rhand_tables[[x]],
+  #         colHeaders = headers,
+  #         rowHeaders = NULL,
+  #         height = 400,
+  #       ) |>
+  #         rhandsontable::hot_cols(
+  #           colWidths = 120,
+  #           manualColumnResize = TRUE,
+  #           columnSorting = TRUE
+  #         )
+
+  #       # циклом итерируемся по индексу;
+  #       for (i in seq(1, length(schema_comp$form_id))) {
+  #         # получаем информацию о типе столбца
+  #         type <- dplyr::filter(schema_comp, form_id == schema_comp$form_id[i]) |>
+  #           dplyr::pull(form_type)
+
+  #         # информация о воможных вариантнах выбора
+  #         choices <- dplyr::filter(schema, form_id == schema_comp$form_id[i]) |>
+  #           dplyr::pull(choices)
+
+  #         ## проверки
+  #         # текстовое поле
+  #         if (type == "text") {
+  #           rh_tabel <- rh_tabel |>
+  #             hot_col(col = headers[i], type = "autocomplete")
+  #         }
+
+  #         # выбор из списка
+  #         if (type == "select_one") {
+  #           rh_tabel <- rh_tabel |>
+  #             hot_col(col = headers[i], type = "dropdown", source = choices)
+  #         }
+
+  #         # дата
+  #         if (type == "date") {
+  #           rh_tabel <- rh_tabel |>
+  #             hot_col(col = headers[i], type = "date", dateFormat = "DD.MM.YYYY", language = "ru-RU")
+  #         }
+  #       }
+
+  #       # передаем в оутпут полученный объект
+  #       output[[x]] <- renderRHandsontable({
+  #         rh_tabel
+  #       })
+  #     }
+  #   )
+  # })
+
+  # =========================================
+  # MAIN BUTTONS LOGIC ======================
+  # =========================================
+  ## добавить новый главный ключ  ------------------------
+  observeEvent(input$add_new_main_key_button, {
+
+    # данные для главного ключа
+    scheme_for_key_input <- SCHEME_MAIN |>
+      dplyr::filter(form_id == "main_key")
+
+    # создать форму для выбора ключа
+    ui1 <- rlang::exec(
+      .fn = utils$render_forms, 
+      !!!distinct(scheme_for_key_input, form_id, form_label, form_type),
+      main_scheme = scheme_for_key_input
+    )
+
+    # даилог создания нового ключа
+    showModal(modalDialog(
+      title = "Создать новую запись",
+      ui1,
+      footer = tagList(
+        actionButton("confirm_create_new_main_key", "Создать")
+      ),
+      easyClose = TRUE
+    ))
+
+  })
+
+  ## действие при подтверждении (проверка нового создаваемого ключа) -------
+  observeEvent(input$confirm_create_new_main_key, {
+    req(input$main_key)
+
+    con <- db$make_db_connection("confirm_create_new_main_key")
+    on.exit(db$close_db_connection(con, "confirm_create_new_key"), add = TRUE)
+
+    existed_key <- db$get_keys_from_table("main", con)
+    
+    # если введенный ключ уже есть в базе
+    if (input$main_key %in% existed_key) {
+      showNotification(
+        sprintf("В базе уже запись с данным ключем."),
+        type = "error"
+      )
+      return()
+    }
+    
+    values$main_key <- input$main_key
+    utils$clean_forms(main_id_and_types_list)
+
+    removeModal()
+  })
+
+  ## очистка всех полей -----------------------
+  # show modal on click of button
+  observeEvent(input$clean_data_button, {
+    showModal(modal_clean_all)
+  })
+
+  # when action confirm - perform action
+  observeEvent(input$clean_all_action, {
+    
+    # rewrite all inputs with empty data
+    utils$clean_forms(main_id_and_types_list)
+
+    removeModal()
+    showNotification("Данные очищены!", type = "warning")
+  })
+
+  ## сохранение даннных -------------------------------
+  observeEvent(input$save_data_button, {
+    req(values$main_key)
+
+    con <- db$make_db_connection("save_data_button")
+    on.exit(db$close_db_connection(con, "save_data_button"), add = TRUE)
+
+    save_inputs_to_db(
+      table_name = "main",
+      id_and_types_list = main_id_and_types_list,
+      con = con
+    )
+
+    showNotification(
+      "Данные успешно сохранены",
+      type = "message"
+    )
+  })
+
+  ## список ключей для загрузки данных -------------------
   observeEvent(input$load_data_button, {
     con <- db$make_db_connection("load_data_button")
     on.exit(db$close_db_connection(con, "load_data_button"))
 
     if (length(dbListTables(con)) != 0 && "main" %in% DBI::dbListTables(con)) {
-      # GET DATA files
-      ids <- DBI::dbGetQuery(con, "SELECT DISTINCT id FROM main") %>%
-        pull()
 
-      output$load_menu <- renderUI({
+      # GET DATA files
+      ids <- db$get_keys_from_table("main", con)
+
+      ui_load_menu <- renderUI({
         selectizeInput(
-          inputId = "read_id_selector",
+          inputId = "load_data_key_selector",
           label = NULL,
           choices = ids,
           selected = NULL,
@@ -539,92 +799,87 @@ server <- function(input, output) {
         )
       })
     } else {
-      output$load_menu <- renderUI({
+      ui_load_menu <- renderUI({
         h5("База данных не содержит записей")
       })
     }
 
-    shiny::showModal(modal_load_patients)
+    shiny::showModal(
+      modalDialog(
+        "Загрузить данные",
+        ui_load_menu,
+        title = "Загрузить имеющиеся данные",
+        footer = tagList(
+          actionButton("cancel_button", "Отмена", class = "btn btn-danger"),
+          actionButton("load_data", "Загрузить данные"),
+        ),
+        easyClose = TRUE
+      )
+    )
   })
 
-  ## load data to input forms ==================================
-  observeEvent(input$read_data, {
-    con <- db$make_db_connection("read_data")
-    on.exit(db$close_db_connection(con, "read_data"), add = TRUE)
+  ## загрузка данных по главному ключу ------------------
+  observeEvent(input$load_data, {
 
-    # main df read
-    test_read_df <- read_df_from_db_by_id("main", con)
+    con <- db$make_db_connection("load_data")
+    on.exit(db$close_db_connection(con, "load_data"), add = TRUE)
 
-    # transform df to list
-    test_read_df <- as.list(test_read_df)
-
-    # rewrite input forms
-    purrr::walk2(
-      .x = inputs_simple_list,
-      .y = names(inputs_simple_list),
-      .f = \(x_type, x_id) {
-        if (getOption("APP.DEBUG")) {
-          values_load <- test_read_df[[x_id]]
-          print(paste(x_type, x_id, values_load, sep = " || "))
-          print(is.na(values_load))
-        }
-
-        # updating forms with loaded data
-        utils$update_forms_with_data(
-          id = x_id,
-          type = x_type,
-          value = test_read_df[[x_id]]
-        )
-      }
+    df <- db$read_df_from_db_by_id(
+      table_name = "main", 
+      main_key = input$load_data_key_selector,
+      con = con
     )
 
-    # inline tables
-    purrr::walk(
-      .x = inputs_tables_list,
-      .f = \(x_table_name) {
-        test_read_df <- read_df_from_db_by_id(x_table_name, con)
-
-        # если табличечки не пустые загружаем их
-        if (!is.null(test_read_df) && nrow(test_read_df) != 0) {
-          rhand_tables[[x_table_name]] <- subset(test_read_df, select = c(-id))
-        } else {
-          rhand_tables[[x_table_name]] <- inline_tables[[x_table_name]]$df_empty
-        }
-      }
+    load_data_to_form(
+      df = df,
+      id_and_types_list = main_id_and_types_list
     )
+  
+    values$main_key <- input$load_data_key_selector
+
     removeModal()
-    showNotification("Данные загружены!", type = "warning")
-    message("load data")
-    log_action_to_db("load", input$read_id_selector, con = con)
+
   })
 
   ## export to .xlsx ====
   output$downloadData <- downloadHandler(
-    filename = paste0("d2tra_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".xlsx"),
+    filename = paste0("test_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".xlsx"),
     content = function(file) {
       con <- db$make_db_connection("downloadData")
       on.exit(db$close_db_connection(con, "downloadData"), add = TRUE)
 
       # get all data
       list_of_df <- purrr::map(
-        .x = purrr::set_names(c("main", inputs_tables_list)),
+        .x = purrr::set_names(c("main", unique(nested_forms_df$form_id))),
         .f = \(x) {
+
           df <- read_df_from_db_all(x, con) %>%
             tibble::as_tibble()
 
           # handle with data
-          if (nrow(df) >= 1 && x == "main") {
-            df <- df %>%
-              dplyr::mutate(dplyr::across(dplyr::contains("date"), as.Date)) %>%
-              print()
-          }
+          scheme <- if (x == "main") SCHEME_MAIN else nested_forms_schemas_list[[x]]
+
+          data_columns   <- subset(scheme, form_type == "date", form_id, drop = TRUE)
+          number_columns <- subset(scheme, form_type == "number", form_id, drop = TRUE)
+
+          df <- df |>
+            dplyr::mutate(
+              # даты - к единому формату
+              dplyr::across(tidyselect::all_of({{data_columns}}), as.Date),
+              # числа - к единому формату десятичных значений
+              dplyr::across(tidyselect::all_of({{number_columns}}), ~ gsub("\\.", "," , .x)),
+            )
+
           df
         }
       )
+
       # set date params
       options("openxlsx2.dateFormat" = "dd.mm.yyyy")
 
-      print("DATA EXPORTED")
+      cli::cli_alert_success("DATA EXPORTED")
+      showNotification("База успешно экспортирована", type = "message")
+
       log_action_to_db("export db", con = con)
 
       # pass tables to export
@@ -641,7 +896,7 @@ server <- function(input, output) {
   ## export to .docx ====
   output$downloadDocx <- downloadHandler(
     filename = function() {
-      paste0(input$id, "_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".docx")
+      paste0(values$main_key, "_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".docx")
     },
     content = function(file) {
       # prepare YAML sections
@@ -732,104 +987,79 @@ server <- function(input, output) {
   )
 
   ## trigger saving function =============
-  observeEvent(input$data_save, {
-    con <- db$make_db_connection("saving data (from modal conf)")
-    on.exit(db$close_db_connection(con, "saving data (from modal conf)"), add = TRUE)
+  # observeEvent(input$overwrite_data_confirm, {
 
-    # убираем плашку
-    removeModal()
+  #   con <- db$make_db_connection("saving data (from modal conf)")
+  #   on.exit(db$close_db_connection(con, "saving data (from modal conf)"), add = TRUE)
 
-    # записываем данные
-    write_all_to_db()
-    log_action_to_db("overwrite", input$id, con = con)
-  })
+  #   # убираем плашку
+  #   removeModal()
+
+  #   # записываем данные
+  #   db$write_df_to_db(
+  #     df = exported_df,
+  #     table_name = "main",
+  #     main_key = values$main_key,
+  #     con = con
+  #   )
+
+  #   log_action_to_db("overwrite", values$main_key, con = con)
+  # })
 
   ## cancel ==========================
   observeEvent(input$cancel_button, {
-    # убираем плашку
     removeModal()
   })
 
   # FUNCTIONS ==============================
   ## write all inputs to db ================
-  write_all_to_db <- function() {
-    con <- db$make_db_connection("fn call `write_all_to_db()`")
-    # on.exit(close_db_connection("fn call `write_all_to_db()`"), add = TRUE)
+  # write_all_to_db <- function() {
 
-    # write main
-    write_df_to_db(values$data, "main", con)
+  #   con <- db$make_db_connection("fn call `write_all_to_db()`")
+  #   # on.exit(close_db_connection("fn call `write_all_to_db()`"), add = TRUE)
 
-    # write inline tables
-    for (i in inputs_tables_list) {
-      df <- tryCatch(
-        # проверка выражения
-        expr = {
-          hot_to_r(input[[i]])
-        },
-        # действия в случае ошибки
-        error = function(e) {
-          message(e$message)
-          showNotification(
-            glue::glue("Невозможно сохранить таблицу `{i}`! Данная ошибка может возникать в случае, если в таблице находятся пустые строки. Попробуйте удалить пустые строки и повторить сохранение."), # nolint
-            duration = NULL,
-            closeButton = FALSE,
-            id = paste0(i, "error_inline_tables"),
-            type = "error"
-          )
-          tibble()
-        }
-      )
+  #   # write main
+  #   write_df_to_db(exported_df, "main", con)
 
-      df <- df %>%
-        dplyr::as_tibble() %>%
-        janitor::remove_empty(which = c("rows")) %>%
-        # adding id to dbs
-        dplyr::mutate(id = input$id, .before = 1)
+  #   # write inline tables
+  #   for (i in inputs_tables_list) {
+  #     df <- tryCatch(
+  #       # проверка выражения
+  #       expr = {
+  #         hot_to_r(input[[i]])
+  #       },
+  #       # действия в случае ошибки
+  #       error = function(e) {
+  #         message(e$message)
+  #         showNotification(
+  #           glue::glue("Невозможно сохранить таблицу `{i}`! Данная ошибка может возникать в случае, если в таблице находятся пустые строки. Попробуйте удалить пустые строки и повторить сохранение."), # nolint
+  #           duration = NULL,
+  #           closeButton = FALSE,
+  #           id = paste0(i, "error_inline_tables"),
+  #           type = "error"
+  #         )
+  #         tibble()
+  #       }
+  #     )
 
-      # если таблица содержит хоть одну строку - сохранить таблицу в базу данных
-      if (nrow(df) != 0) {
-        write_df_to_db(df, i, con)
-        removeNotification(paste0(i, "error_inline_tables"))
-      }
-    }
+  #     df <- df %>%
+  #       dplyr::as_tibble() %>%
+  #       janitor::remove_empty(which = c("rows")) %>%
+  #       # adding id to dbs
+  #       dplyr::mutate(key = input$main_key, .before = 1)
 
-    showNotification(
-      glue::glue("Данные пациента {input$id} сохранены!"),
-      type = "warning"
-    )
-  }
+  #     # если таблица содержит хоть одну строку - сохранить таблицу в базу данных
+  #     if (nrow(df) != 0) {
+  #       write_df_to_db(df, i, con)
+  #       removeNotification(paste0(i, "error_inline_tables"))
+  #     }
+  #   }
 
-  ## helper function writing dbs ========
-  write_df_to_db <- function(df, table_name, con) {
-    # disconnecting on parent function
-
-    # delete exists data for this id
-    if (table_name %in% dbListTables(con)) {
-      del_query <- glue::glue("DELETE FROM {table_name} WHERE id = '{input$id}'")
-      DBI::dbExecute(con, del_query)
-    }
-    # записать данные
-    DBI::dbWriteTable(con, table_name, df, append = TRUE)
-  }
-
-  ## reading tables from db by name and id ========
-  read_df_from_db_by_id <- function(table_name, con) {
-    # DBI::dbConnect(RSQLite::SQLite(), dbfile)
-    # on.exit(DBI::dbDisconnect(con), add = TRUE)
-
-    # check if this table exist
-    if (table_name %in% dbListTables(con)) {
-
-      # prepare query
-      query <- glue::glue("
-        SELECT * FROM {table_name}
-        WHERE id = '{input$read_id_selector}'
-      ")
-
-      # get table as df
-      DBI::dbGetQuery(con, query)
-    }
-  }
+  #   showNotification(
+  #     glue::glue("Данные пациента {input$main_key} сохранены!"),
+  #     type = "warning"
+  #   )
+  # }
 
   ## reading tables from db all ========
   read_df_from_db_all <- function(table_name, con) {

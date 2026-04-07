@@ -49,7 +49,8 @@ render_forms <- function(
   form <- NULL
 
   # параметры только для этой формы
-  filterd_line <- dplyr::filter(main_scheme, form_id == {{form_id}})
+  filterd_line <- main_scheme |>
+    dplyr::filter(form_id == {{form_id}})
 
   # если передана ns() функция то подмеяем id для каждой формы в соответствии с пространством имен
   if (!missing(ns)) {
@@ -178,12 +179,8 @@ render_forms <- function(
     )
   }
 
-  # вложенная таблица
-  if (form_type == "inline_table") {
-    form <- rhandsontable::rHandsontableOutput(outputId = form_id)
-  }
-
-  if (form_type == "inline_table2") {
+  # вложенная форма
+  if (form_type == "nested_forms") {
     form <- shiny::actionButton(inputId = form_id, label = label)
   }
 
@@ -235,75 +232,104 @@ get_empty_data <- function(type) {
 #' @param value - value to update;
 #' @param local_delimeter - delimeter to split file
 update_forms_with_data <- function(
-  id,
-  type,
+  form_id,
+  form_type,
   value,
-  local_delimeter = getOption("SYMBOL_DELIM")
+  local_delimeter = getOption("SYMBOL_DELIM"),
+  ns
 ) {
 
-  if (type == "text") {
-    shiny::updateTextAreaInput(inputId = id, value = value)
+  # если передана ns() функция то подмеяем id для каждой формы в соответствии с пространством имен
+  if (!missing(ns) & !is.null(ns)) {
+    form_id <- ns(form_id)
   }
 
-  if (type == "number") {
-    shiny::updateTextAreaInput(inputId = id, value = value)
+  if (form_type == "text") {
+    shiny::updateTextAreaInput(inputId = form_id, value = value)
+  }
+
+  if (form_type == "number") {
+    shiny::updateTextAreaInput(inputId = form_id, value = value)
   }
 
   # supress warnings when applying NA or NULL to date input form
-  if (type == "date") {
+  if (form_type == "date") {
     suppressWarnings(
-      shiny::updateDateInput(inputId = id, value = value)
+      shiny::updateDateInput(inputId = form_id, value = value)
     )
   }
 
   # select_one
-  if (type == "select_one") {
+  if (form_type == "select_one") {
     # update choices
-    # old_choices <- subset(scheme, form_id == id, choices) |> dplyr::pull()
+    # old_choices <- subset(scheme, form_id == form_id, choices) |> dplyr::pull()
     # new_choices <- unique(c(old_choices, value))
     # new_choices <- new_choices[!is.na(new_choices)]
 
-    # shiny::updateSelectizeInput(inputId = id, selected = value, choices = new_choices)
-    shiny::updateSelectizeInput(inputId = id, selected = value)
+    # shiny::updateSelectizeInput(inputId = form_id, selected = value, choices = new_choices)
+    shiny::updateSelectizeInput(inputId = form_id, selected = value)
   }
 
   # select_multiple
   # check if value is not NA and split by delimetr
-  if (type == "select_multiple" && !is.na(value)) {
+  if (form_type == "select_multiple" && !is.na(value)) {
     vars <- stringr::str_split_1(value, local_delimeter)
 
     # update choices
-    # old_choices <- subset(scheme, form_id == id, choices) |> dplyr::pull()
+    # old_choices <- subset(scheme, form_id == form_id, choices) |> dplyr::pull()
     # new_choices <- unique(c(old_choices, vars))
     # new_choices <- new_choices[!is.na(new_choices)]
 
-    # shiny::updateSelectizeInput(inputId = id, selected = vars, choices = new_choices)
-    shiny::updateSelectizeInput(inputId = id, selected = vars)
+    # shiny::updateSelectizeInput(inputId = form_id, selected = vars, choices = new_choices)
+    shiny::updateSelectizeInput(inputId = form_id, selected = vars)
   }
 
   # in other case fill with `character(0)` to proper reseting form
-  if (type == "select_multiple" && is.na(value)) {
-    shiny::updateSelectizeInput(inputId = id, selected = character(0))
+  if (form_type == "select_multiple" && is.na(value)) {
+    shiny::updateSelectizeInput(inputId = form_id, selected = character(0))
   }
 
   # radio buttons
-  if (type == "radio" && !is.na(value)) {
-    shiny::updateRadioButtons(inputId = id, selected = value)
+  if (form_type == "radio" && !is.na(value)) {
+    shiny::updateRadioButtons(inputId = form_id, selected = value)
   }
-  if (type == "radio" && is.na(value)) {
-    shiny::updateRadioButtons(inputId = id, selected = character(0))
+  if (form_type == "radio" && is.na(value)) {
+    shiny::updateRadioButtons(inputId = form_id, selected = character(0))
   }
 
   # checkboxes
-  if (type == "checkbox" && !is.na(value)) {
+  if (form_type == "checkbox" && !is.na(value)) {
     vars <- stringr::str_split_1(value, local_delimeter)
-    shiny::updateCheckboxGroupInput(inputId = id, selected = vars)
+    shiny::updateCheckboxGroupInput(inputId = form_id, selected = vars)
   }
-  if (type == "checkbox" && is.na(value)) {
-    shiny::updateCheckboxGroupInput(inputId = id, selected = character(0))
+  if (form_type == "checkbox" && is.na(value)) {
+    shiny::updateCheckboxGroupInput(inputId = form_id, selected = character(0))
   }
 
   # if (type == "inline_table") {
   #   message("EMPTY")
   # }
+}
+
+#' @export
+clean_forms <- function(id_and_types_list, ns) {
+
+ # если передана ns() функция то подмеяем id для каждой формы в соответствии с пространством имен
+  if (missing(ns)) ns <- NULL
+    
+  purrr::walk2(
+    .x = id_and_types_list,
+    .y = names(id_and_types_list),
+    .f = \(x_type, x_id) {
+      
+      # using function to update forms
+      update_forms_with_data(
+        form_id   = x_id,
+        form_type = x_type,
+        value     = get_empty_data(x_type),
+        ns = ns
+      )
+    }
+  )
+  
 }
