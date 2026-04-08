@@ -1,13 +1,11 @@
 suppressPackageStartupMessages({
   library(DBI)
-  # library(RSQLite)
   library(tidyr)
   library(dplyr)
   library(purrr)
   library(magrittr)
   library(shiny)
   library(bslib)
-  # library(rhandsontable)
   library(shinymanager)
 })
 
@@ -21,9 +19,7 @@ config <- config::get(file = "configs/config.yml")
 
 folder_with_schemas <- fs::path("configs/schemas")
 FILE_SCHEME         <- fs::path(folder_with_schemas, "schema.xlsx")
-# dbfile              <- fs::path("data.sqlite")
 
-# options(box.path = getwd())
 box::purge_cache()
 box::use(
   modules/utils,
@@ -80,19 +76,10 @@ extract_forms_id_and_types_from_scheme <- function(scheme, drop_key = c("main_ke
 # load scheme
 SCHEMES_LIST <- list()
 SCHEMES_LIST[["main"]] <- load_scheme_from_xlsx("main")
-# SCHEME_MAIN <- load_scheme_from_xlsx("main")
-
 
 # get list of simple inputs
 main_id_and_types_list <- extract_forms_id_and_types_from_scheme(SCHEMES_LIST[["main"]])
 
-# # get list of inputs with inline tables
-# inputs_tables_list <- SCHEME_MAIN |>
-#   dplyr::filter(form_type == "inline_table") |>
-#   dplyr::distinct(form_id) |>
-#   tibble::deframe()
-
-# 
 nested_forms_df <- SCHEMES_LIST[["main"]] |>
   dplyr::filter(form_type == "nested_forms") |>
   dplyr::distinct(form_id, .keep_all = TRUE)
@@ -145,38 +132,6 @@ purrr::walk(
 
 # close connection to prevent data loss
 db$close_db_connection(con)
-
-# # INLINE TABLES =====================
-# # создаем для каждой таблицы объект
-# inline_tables <- purrr::map(
-#   .x = purrr::set_names(inputs_tables_list),
-#   .f = \(x_inline_table_name) {
-
-#     # получить имя файла со схемой
-#     file_name <- SCHEME_MAIN |>
-#       dplyr::filter(form_id == x_inline_table_name) |>
-#       dplyr::pull(choices)
-
-#     # load scheme
-#     schemaaa <- readxl::read_xlsx(fs::path(folder_with_schemas, file_name)) |>
-#       tidyr::fill(dplyr::everything(), .direction = "down")
-
-#     # список форм в схеме
-#     inline_forms <- schemaaa |>
-#       dplyr::distinct(form_id) |>
-#       dplyr::pull()
-
-#     # макет таблицы (пустой)
-#     DF_gen <- as.list(setNames(rep(as.character(NA), length(inline_forms)), inline_forms)) |>
-#       as.data.frame()
-
-#     # make 12 more empty rows
-#     DF_gen <- rbind(DF_gen, DF_gen[rep(1, 12), ])
-#     rownames(DF_gen) <- NULL
-
-#     list(schema = schemaaa, df_empty = DF_gen)
-#   }
-# )
 
 # generate nav panels for each page
 nav_panels_list <- purrr::map(
@@ -304,26 +259,6 @@ server <- function(input, output, session) {
         )
       }
     )
-
-    # inline tables
-    # purrr::walk(
-    #   .x = inputs_tables_list,
-    #   .f = \(x_table_name) {
-    #     loaded_df_for_id <- read_df_from_db_by_id(x_table_name, con)
-
-    #     # если табличечки не пустые загружаем их
-    #     if (!is.null(loaded_df_for_id) && nrow(loaded_df_for_id) != 0) {
-    #       rhand_tables[[x_table_name]] <- subset(loaded_df_for_id, select = c(-key))
-    #     } else {
-    #       rhand_tables[[x_table_name]] <- inline_tables[[x_table_name]]$df_empty
-    #     }
-    #   }
-    # )
-
-    # showNotification("Данные загружены!", type = "message")
-    # cli::cli_alert_success("данные для '{main_key}' из таблицы {table_name} успешно загружены")
-
-    # log_action_to_db("load", main_key, con = con)
   }
 
   ## сохранение данных из форм в базу данных --------
@@ -730,85 +665,6 @@ server <- function(input, output, session) {
     iv_main$is_valid()
   })
 
-  # CREATE RHANDSOME TABLES =====================
-  # записать массив пустых табличек в rhands_tables
-  # purrr::walk(
-  #   .x = purrr::set_names(inputs_tables_list),
-  #   .f = \(x_inline_table) {
-  #     rhand_tables[[x_inline_table]] <- inline_tables[[x_inline_table]]$df_empty
-  #   }
-  # )
-
-  # # render tables
-  # observe({
-  #   # MESSAGE
-  #   purrr::walk(
-  #     .x = inputs_tables_list,
-  #     .f = \(x) {
-  #       # вытаскиваем схемы из заготовленного ранее списка
-  #       schema <- inline_tables[[x]]$schema
-
-  #       # убрать дубликаты
-  #       schema_comp <- schema |>
-  #         dplyr::distinct(form_id, form_label, form_type)
-
-  #       # заголовки
-  #       headers <- dplyr::pull(schema_comp, form_label)
-
-  #       # fixes empty rows error
-  #       rownames(rhand_tables[[x]]) <- NULL
-
-  #       # создать объект рандсонтебл
-  #       rh_tabel <- rhandsontable::rhandsontable(
-  #         rhand_tables[[x]],
-  #         colHeaders = headers,
-  #         rowHeaders = NULL,
-  #         height = 400,
-  #       ) |>
-  #         rhandsontable::hot_cols(
-  #           colWidths = 120,
-  #           manualColumnResize = TRUE,
-  #           columnSorting = TRUE
-  #         )
-
-  #       # циклом итерируемся по индексу;
-  #       for (i in seq(1, length(schema_comp$form_id))) {
-  #         # получаем информацию о типе столбца
-  #         type <- dplyr::filter(schema_comp, form_id == schema_comp$form_id[i]) |>
-  #           dplyr::pull(form_type)
-
-  #         # информация о воможных вариантнах выбора
-  #         choices <- dplyr::filter(schema, form_id == schema_comp$form_id[i]) |>
-  #           dplyr::pull(choices)
-
-  #         ## проверки
-  #         # текстовое поле
-  #         if (type == "text") {
-  #           rh_tabel <- rh_tabel |>
-  #             hot_col(col = headers[i], type = "autocomplete")
-  #         }
-
-  #         # выбор из списка
-  #         if (type == "select_one") {
-  #           rh_tabel <- rh_tabel |>
-  #             hot_col(col = headers[i], type = "dropdown", source = choices)
-  #         }
-
-  #         # дата
-  #         if (type == "date") {
-  #           rh_tabel <- rh_tabel |>
-  #             hot_col(col = headers[i], type = "date", dateFormat = "DD.MM.YYYY", language = "ru-RU")
-  #         }
-  #       }
-
-  #       # передаем в оутпут полученный объект
-  #       output[[x]] <- renderRHandsontable({
-  #         rh_tabel
-  #       })
-  #     }
-  #   )
-  # })
-
   # =========================================
   # MAIN BUTTONS LOGIC ======================
   # =========================================
@@ -1107,81 +963,12 @@ server <- function(input, output, session) {
     }
   )
 
-  ## trigger saving function =============
-  # observeEvent(input$overwrite_data_confirm, {
-
-  #   con <- db$make_db_connection("saving data (from modal conf)")
-  #   on.exit(db$close_db_connection(con, "saving data (from modal conf)"), add = TRUE)
-
-  #   # убираем плашку
-  #   removeModal()
-
-  #   # записываем данные
-  #   db$write_df_to_db(
-  #     df = exported_df,
-  #     table_name = "main",
-  #     main_key = values$main_key,
-  #     con = con
-  #   )
-
-  #   log_action_to_db("overwrite", values$main_key, con = con)
-  # })
-
   ## cancel ==========================
   observeEvent(input$cancel_button, {
     removeModal()
   })
 
   # FUNCTIONS ==============================
-  ## write all inputs to db ================
-  # write_all_to_db <- function() {
-
-  #   con <- db$make_db_connection("fn call `write_all_to_db()`")
-  #   # on.exit(close_db_connection("fn call `write_all_to_db()`"), add = TRUE)
-
-  #   # write main
-  #   write_df_to_db(exported_df, "main", con)
-
-  #   # write inline tables
-  #   for (i in inputs_tables_list) {
-  #     df <- tryCatch(
-  #       # проверка выражения
-  #       expr = {
-  #         hot_to_r(input[[i]])
-  #       },
-  #       # действия в случае ошибки
-  #       error = function(e) {
-  #         message(e$message)
-  #         showNotification(
-  #           glue::glue("Невозможно сохранить таблицу `{i}`! Данная ошибка может возникать в случае, если в таблице находятся пустые строки. Попробуйте удалить пустые строки и повторить сохранение."), # nolint
-  #           duration = NULL,
-  #           closeButton = FALSE,
-  #           id = paste0(i, "error_inline_tables"),
-  #           type = "error"
-  #         )
-  #         tibble()
-  #       }
-  #     )
-
-  #     df <- df %>%
-  #       dplyr::as_tibble() %>%
-  #       janitor::remove_empty(which = c("rows")) %>%
-  #       # adding id to dbs
-  #       dplyr::mutate(key = input$main_key, .before = 1)
-
-  #     # если таблица содержит хоть одну строку - сохранить таблицу в базу данных
-  #     if (nrow(df) != 0) {
-  #       write_df_to_db(df, i, con)
-  #       removeNotification(paste0(i, "error_inline_tables"))
-  #     }
-  #   }
-
-  #   showNotification(
-  #     glue::glue("Данные пациента {input$main_key} сохранены!"),
-  #     type = "warning"
-  #   )
-  # }
-
   ## reading tables from db all ========
   read_df_from_db_all <- function(table_name, con) {
     # DBI::dbConnect(RSQLite::SQLite(), dbfile)
