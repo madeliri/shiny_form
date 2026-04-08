@@ -166,6 +166,7 @@ ui <- page_sidebar(
     actionButton("load_data_button", "Загрузить данные", icon("pencil", lib = "font-awesome")),
     downloadButton("downloadData", "Экспорт в .xlsx"),
     downloadButton("downloadDocx", "get .docx (test only)"),
+    actionButton("button_upload_data_from_xlsx", "импорт!"),
     position = "left",
     open = list(mobile = "always")
   ),
@@ -797,6 +798,7 @@ server <- function(input, output, session) {
 
   ## загрузка данных по главному ключу ------------------
   observeEvent(input$load_data, {
+    req(input$load_data_key_selector)
 
     con <- db$make_db_connection("load_data")
     on.exit(db$close_db_connection(con, "load_data"), add = TRUE)
@@ -962,6 +964,118 @@ server <- function(input, output, session) {
       )
     }
   )
+
+  ## upload xlsx to df ----------------------
+  observeEvent(input$button_upload_data_from_xlsx, {
+
+    showModal(modalDialog(
+      title = "Добавить пациентов к текущему списку...",
+      fileInput(
+        "upload_xlsx",
+        NULL,
+        buttonLabel = "Выбрать файлы...",
+        placeholder = "No file selected",
+        multiple = TRUE,
+        accept = ".xlsx",
+        width = 450
+      ),
+      checkboxInput("upload_data_from_xlsx_owerwrite_all_data", "перезаписать все данные", width = 450),
+      footer = tagList(
+        actionButton("button_upload_data_from_xlsx_confirm", "Добавить")
+      ),
+      easyClose = TRUE
+    ))
+
+  })
+
+  observeEvent(input$button_upload_data_from_xlsx_confirm, {
+    req(input$upload_xlsx
+    )
+    con <- db$make_db_connection("button_upload_data_from_xlsx_confirm")
+    on.exit(db$close_db_connection(con, "button_upload_data_from_xlsx_confirm"), add = TRUE)
+
+    file <- input$upload_xlsx$datapath
+    # print(file)
+    wb <- openxlsx2::wb_load(file)
+
+    # проверка на наличие всех листов в файле
+    if (!all(names(SCHEMES_LIST) %in% openxlsx2::wb_get_sheet_names(wb))) {
+      cli::cli_alert_warning("данные в файле '{file} не соответствуют схеме'")
+      return()
+    }
+
+    # проверка схемы --------------
+    for (table_name in names(SCHEMES_LIST)) {
+
+      df     <- openxlsx2::read_xlsx(wb, table_name) 
+      scheme <- SCHEMES_LIST[[table_name]] |>
+        filter(!form_type %in% c("description", "nested_forms"))
+
+      # столбцы в таблицы и схема
+      df_to_schema_compare <- setdiff(colnames(df), unique(scheme$form_id))
+      if (length(schema_to_df_compare) > 0 ) {
+        cli::cli_warn(c("в схеме для '{table_name}' нет следующих столбцов:", paste("- ", df_to_schema_compare)))
+      }
+
+      # схема и столбцы в таблице
+      schema_to_df_compare <- setdiff(unique(scheme$form_id), colnames(df))
+      if (length(schema_to_df_compare) > 0 ) {
+
+        message <- glue::glue("столбцы в таблице '{table_name}' не соответсвуют схеме")
+        cli::cli_warn(c(message, paste("- ", schema_to_df_compare)))
+        showNotification(message, type = "error")
+
+        return()
+      }
+    }
+
+    # обновление данных
+    for (table_name in names(SCHEMES_LIST)) {
+
+      df     <- openxlsx2::read_xlsx(wb, table_name) 
+      scheme <- SCHEMES_LIST[[table_name]] |>
+        filter(!form_type %in% c("description", "nested_forms"))
+
+      date_columns <- subset(scheme, form_type == "date", form_id, drop = TRUE)
+
+      df <- df |>
+        dplyr::mutate(
+          # даты - к единому формату
+          dplyr::across(tidyselect::all_of({{date_columns}}), \(x) purrr::map_chr(x, db$excel_to_db_dates_converter)),
+        ) |>
+        select(all_of(unique(c("main_key", scheme$form_id))))
+
+      df_original <- DBI::dbReadTable(con, table_name) |>
+        as_tibble()
+
+      if (input$upload_data_from_xlsx_owerwrite_all_data == TRUE) cli::cli_abort("not implemented yet")
+
+      walk(
+        .x = unique(df$main_key),
+        .f = \(main_key) {
+
+          if (main_key %in% unique(df_original$main_key)) {
+            DBI::dbExecute(con, glue::glue("DELETE FROM {table_name} WHERE main_key = '{main_key}'"))
+          }
+        }
+      )
+
+      DBI::dbWriteTable(
+        con,
+        name = table_name,
+        value = df,
+        append = TRUE
+      )
+
+      message <- glue::glue("Данные таблицы '{table_name}' успешно обновлены")
+      showNotification(
+        message,
+        type = "message"
+      )
+      cli::cli_alert_success(message)
+    }
+    removeModal()
+  })
 
   ## cancel ==========================
   observeEvent(input$cancel_button, {

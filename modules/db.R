@@ -165,25 +165,6 @@ write_df_to_db <- function(df, table_name, scheme, main_key, nested_key, con) {
   date_columns   <- subset(scheme, form_type == "date", form_id, drop = TRUE)
   number_columns <- subset(scheme, form_type == "number", form_id, drop = TRUE)
 
-  excel_to_db_dates_converter <- function(date) {
-
-    parse_date1 <- tryCatch(
-      as.Date(date, tryFormats = c("%Y-%m-%d")),
-      error = function(e) NULL
-    )
-    parse_date2 <- suppressWarnings(as.Date(as.numeric(date), origin = "1899-12-30"))
-
-    date <- if (!is.null(parse_date1)) {
-      parse_date1
-    } else if (!is.na(parse_date2)) {
-      parse_date2
-    } else {
-      date
-    }
-    
-    date <- as.character(format(date, "%Y-%m-%d"))
-  }
-
   df <- df |>
     dplyr::mutate(
       # даты - к единому формату
@@ -260,4 +241,38 @@ get_nested_keys_from_table <- function(table_name, main_key, con) {
   DBI::dbGetQuery(con, glue::glue("SELECT DISTINCT nested_key FROM {table_name} WHERE main_key == '{main_key}'")) |>
     dplyr::pull()
 
+}
+
+
+### HELPERS ---------
+#' @export
+excel_to_db_dates_converter <- function(date) {
+
+  if(is.na(date)) return(NA)
+  # cli::cli_inform("date: {date} | nchar: {nchar(date)} | typeof: {typeof(date)}")
+
+  # если текст, количество символов 7, и маска соответствует 'MM.YYYY'
+  if (typeof(date) == "character" & nchar(date) == 4 & grepl("((?:19|20)\\d\\d)", date)) {
+    date <- sprintf("%s-01-01", date)
+  } else if (typeof(date) == "character" & nchar(date) == 7 & grepl("(0?[1-9]|1[012])\\.((?:19|20)\\d\\d)", date)) {
+    # если текст, количество символов 7, и маска соответствует 'MM.YYYY'
+    date <- sprintf("01.%s", date)
+  }
+
+  parse_date1 <- tryCatch(
+    as.Date(date, tryFormats = c("%d.%m.%Y", "%Y-%m-%d")),
+    error = function(e) NULL
+  )
+  parse_date2 <- suppressWarnings(as.Date(as.numeric(date), origin = "1899-12-30"))
+
+  date <- if (!is.null(parse_date1)) {
+    parse_date1
+  } else if (!is.na(parse_date2)) {
+    parse_date2
+  } else {
+    date
+  }
+  
+  date <- as.character(format(date, "%Y-%m-%d"))
+  date
 }
