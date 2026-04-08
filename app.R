@@ -45,9 +45,13 @@ rmarkdown::find_pandoc(dir = "/opt/homebrew/bin/")
 if (!rmarkdown::pandoc_available()) warning("Can't find pandoc!")
 
 load_scheme_from_xlsx <- function(
-  sheet_name,
-  colnames = c("part", "subgroup", "form_id", "form_label", "form_type")
+  sheet_name
 ) {
+
+  colnames <- switch(sheet_name,
+    "main" = c("part", "subgroup", "form_id", "form_label", "form_type"),
+    c("subgroup", "form_id", "form_label", "form_type")
+  )
 
   readxl::read_xlsx(FILE_SCHEME, sheet = sheet_name) |>
     # fill NA down
@@ -58,26 +62,29 @@ load_scheme_from_xlsx <- function(
 
 }
 
-extract_forms_id_and_types_from_scheme <- function(scheme, key = c("main_key", "nested_key")) {
+extract_forms_id_and_types_from_scheme <- function(scheme, drop_key = c("main_key", "nested_key")) {
 
-  key <- match.arg(key)
+  drop_key <- match.arg(drop_key)
 
   form_id_and_types_list <- scheme |>
     dplyr::filter(!form_type %in% c("inline_table", "nested_forms","description", "description_header")) |>
     dplyr::distinct(form_id, form_type) |>
     tibble::deframe()
 
-  if(!key %in% names(form_id_and_types_list)) cli::cli_abort("в схеме должно быть поле с ключем (key)")
-  form_id_and_types_list[names(form_id_and_types_list) != key]
+  if(!drop_key %in% names(form_id_and_types_list)) cli::cli_abort("в схеме должно быть поле с ключем (key)")
+  form_id_and_types_list[names(form_id_and_types_list) != drop_key]
 
 }
 
 # SCHEME_MAIN UNPACK ==========================
 # load scheme
-SCHEME_MAIN <- load_scheme_from_xlsx("main")
+SCHEMES_LIST <- list()
+SCHEMES_LIST[["main"]] <- load_scheme_from_xlsx("main")
+# SCHEME_MAIN <- load_scheme_from_xlsx("main")
+
 
 # get list of simple inputs
-main_id_and_types_list <- extract_forms_id_and_types_from_scheme(SCHEME_MAIN)
+main_id_and_types_list <- extract_forms_id_and_types_from_scheme(SCHEMES_LIST[["main"]])
 
 # # get list of inputs with inline tables
 # inputs_tables_list <- SCHEME_MAIN |>
@@ -86,12 +93,12 @@ main_id_and_types_list <- extract_forms_id_and_types_from_scheme(SCHEME_MAIN)
 #   tibble::deframe()
 
 # 
-nested_forms_df <- SCHEME_MAIN |>
+nested_forms_df <- SCHEMES_LIST[["main"]] |>
   dplyr::filter(form_type == "nested_forms") |>
   dplyr::distinct(form_id, .keep_all = TRUE)
 
 # лист со схемами для всех вложенных формы
-nested_forms_schemas_list <- purrr::map(
+purrr::walk(
 
   .x = purrr::set_names(unique(nested_forms_df$form_id)),
   .f = \(nested_form_id) {
@@ -101,7 +108,7 @@ nested_forms_schemas_list <- purrr::map(
       dplyr::pull(choices)
 
     # загрузка схемы для данной вложенной формы
-    load_scheme_from_xlsx(nested_form_scheme_sheet_name, colnames = c("subgroup","form_id", "form_label", "form_type"))
+    SCHEMES_LIST[[nested_form_id]] <<- load_scheme_from_xlsx(nested_form_scheme_sheet_name)
 
   }
 )
@@ -123,7 +130,7 @@ purrr::walk(
     nested_form_scheme_sheet_name <- this_inline_table2_info$choices
 
     # загрузка схемы для данной вложенной формы
-    this_nested_form_scheme <- load_scheme_from_xlsx(nested_form_scheme_sheet_name, colnames = c("subgroup","form_id", "form_label", "form_type"))
+    this_nested_form_scheme <- load_scheme_from_xlsx(nested_form_scheme_sheet_name)
 
     this_table_id_and_types_list <- extract_forms_id_and_types_from_scheme(this_nested_form_scheme, "nested_key")
 
@@ -173,11 +180,11 @@ db$close_db_connection(con)
 
 # generate nav panels for each page
 nav_panels_list <- purrr::map(
-  .x = unique(SCHEME_MAIN$part),
+  .x = unique(SCHEMES_LIST[["main"]]$part),
   .f = \(page_name) {
 
     # отделить схему для каждой страницы
-    this_page_panels_scheme <- SCHEME_MAIN |>
+    this_page_panels_scheme <- SCHEMES_LIST[["main"]] |>
       dplyr::filter(!form_id %in% c("main_key", "nested_key")) |>
       dplyr::filter(part == {{page_name}})
 
@@ -196,7 +203,7 @@ ui <- page_sidebar(
   title = config$header,
   theme = bs_theme(version = 5, preset = "bootstrap"),
   sidebar = sidebar(
-    actionButton("add_new_main_key_button", "ДОБАВИТЬ ЧТО_ТО", icon("floppy-disk", lib = "font-awesome")),
+    actionButton("add_new_main_key_button", "Добавить новую запись", icon("plus", lib = "font-awesome")),
     actionButton("save_data_button", "Сохранить данные", icon("floppy-disk", lib = "font-awesome")),
     actionButton("clean_data_button", "Очистить данные", icon("user-plus", lib = "font-awesome")),
     textOutput("status_message"),
@@ -227,7 +234,6 @@ modal_clean_all <- modalDialog(
   easyClose = TRUE
 )
 
-
 # init auth =======================
 if (AUTH_ENABLED) ui <- shinymanager::secure_app(ui, enable_admin = TRUE)
 
@@ -252,13 +258,21 @@ server <- function(input, output, session) {
   # REACTIVE VALUES =================================
   # Create a reactive values object to store the input data
   values <- reactiveValues(
-    data = NULL,
+    data     = NULL,
     main_key = NULL,
     nested_key = NULL,
     nested_form_id = NULL,
     nested_id_and_types = NULL
   )
-  rhand_tables <- reactiveValues()
+
+  # showModal(modalDialog(
+  #   title = "Добро пожаловать",
+  #   "что будем делать?",
+  #   footer = tagList(
+  #     actionButton("add_new_main_key_button", "добавить"),
+  #     actionButton("load_data_button", "загрузить")
+  #   )
+  # ))
 
   # ==========================================
   # ОБЩИЕ ФУНКЦИИ ============================
@@ -324,7 +338,7 @@ server <- function(input, output, session) {
     input_ids   <- names(id_and_types_list)
 
     if (missing(ns)) ns <- NULL
-  
+
     # собрать все значения по введенным данным;
     exported_values <- purrr::map2(
       .x = input_ids,
@@ -338,10 +352,12 @@ server <- function(input, output, session) {
         if (length(input_d) == 0) {
           return(utils$get_empty_data(x_type))
         }
+
         # return element if there one
         if (length(input_d) == 1) {
           return(input_d)
         }
+
         # если елементов больше одного - объединять через ";"
         if (length(input_d) > 1) paste(input_d, collapse = getOption("SYMBOL_DELIM"))
       }
@@ -375,6 +391,7 @@ server <- function(input, output, session) {
     db$write_df_to_db(
       df = exported_df,
       table_name = table_name,
+      scheme = SCHEMES_LIST[[table_name]],
       main_key = values$main_key,
       nested_key = values$nested_key,
       con = con
@@ -396,7 +413,7 @@ server <- function(input, output, session) {
         on.exit(db$close_db_connection(con, "nested_tables"), add = TRUE)
 
         values$nested_form_id <- nested_form_id
-        values$nested_key <- NULL # для нормальной работы реактивных значений
+        values$nested_key     <- NULL # для нормальной работы реактивных значений
 
         show_modal_for_nested_form(con)
 
@@ -410,53 +427,70 @@ server <- function(input, output, session) {
     ns <- NS(values$nested_form_id)
 
     # загрузка схемы для данной вложенной формы
-    this_nested_form_scheme <- nested_forms_schemas_list[[values$nested_form_id]]
-
+    this_nested_form_scheme <- SCHEMES_LIST[[values$nested_form_id]]
     values$nested_id_and_types <- extract_forms_id_and_types_from_scheme(this_nested_form_scheme, "nested_key")
+
+    # мини-схема для ключа
+    this_nested_form_key_scheme <- subset(this_nested_form_scheme, form_id == "nested_key")
+    if (nrow(this_nested_form_key_scheme) > 1) cli::cli_abort("количество строк не может быть больше одного для ключа")
 
     # выбираем все ключи из баз данных
     kyes_for_this_table <- db$get_nested_keys_from_table(values$nested_form_id, values$main_key, con)
     kyes_for_this_table <- unique(c(values$nested_key, kyes_for_this_table))
-    values$nested_key <- kyes_for_this_table[[1]]
+    values$nested_key <- if (length(kyes_for_this_table) == 0) NULL else kyes_for_this_table[[1]]
+
+    # если ключ в формате даты - дать человекочитаемые данные
+    if (this_nested_form_key_scheme$form_type == "date") {
+      kyes_for_this_table <- setNames(
+        kyes_for_this_table,
+        format(as.Date(kyes_for_this_table), "%d.%m.%Y")
+      )
+    }
 
     # nested ui
-    yay_its_fun <- purrr::map(
-      .x = unique(this_nested_form_scheme$subgroup),
-      .f = \(subgroup) {
+    if (!is.null(values$nested_key)) {
+      yay_its_fun <- purrr::map(
+        .x = unique(this_nested_form_scheme$subgroup),
+        .f = \(subgroup) {
 
-        subroup_scheme <- this_nested_form_scheme |>
-          dplyr::filter(subgroup == {{subgroup}}) |>
-          dplyr::filter(!form_id %in% c("main_key", "nested_key"))
+          subroup_scheme <- this_nested_form_scheme |>
+            dplyr::filter(subgroup == {{subgroup}}) |>
+            dplyr::filter(!form_id %in% c("main_key", "nested_key"))
 
-        bslib::nav_panel(
-          title = subgroup,
-          purrr::pmap(
-            .l = dplyr::distinct(subroup_scheme, form_id, form_label, form_type),
-            .f = utils$render_forms,
-            main_scheme = subroup_scheme,
-            ns = ns
+          bslib::nav_panel(
+            title = subgroup,
+            purrr::pmap(
+              .l = dplyr::distinct(subroup_scheme, form_id, form_label, form_type),
+              .f = utils$render_forms,
+              main_scheme = subroup_scheme,
+              ns = ns
+            )
           )
-        )
-      }
-    )
+        }
+      )
+    } else {
+      yay_its_fun <- list(bslib::nav_panel("", "empty"))
+    }
+    # yay_its_fun <- !!!yay_its_fun
 
     # ui для всплывающего окна 
     ui_for_inline_table <- navset_card_underline(
-        sidebar = sidebar(
-          width = 300,
-          selectizeInput(
-            inputId = "nested_key_selector",
-            label = "nested_key label", 
-            choices = kyes_for_this_table,
-            selected = values$nested_key,
-            # options = list(placeholder = "действие комиссии", create = FALSE, onInitialize = I('function() { this.setValue(""); }'))
-          ),
-          actionButton("add_new_nested_key_button", "add"),
-          actionButton("nested_form_save_button", "save")
+      sidebar = sidebar(
+        width = 300,
+        selectizeInput(
+          inputId = "nested_key_selector",
+          label = this_nested_form_key_scheme$form_label, 
+          choices = kyes_for_this_table,
+          selected = values$nested_key,
+          # options = list(placeholder = "действие комиссии", create = FALSE, onInitialize = I('function() { this.setValue(""); }'))
         ),
-        !!!yay_its_fun
-      )
-
+        actionButton("add_new_nested_key_button", "add"),
+        actionButton("nested_form_save_button", "save"),
+        actionButton("nested_form_dt_button", "dt")
+      ),
+      # if (!is.null(values$nested_key)) {rlang::syms(!!!yay_its_fun)} else bslib::nav_panel("empty")
+      !!!yay_its_fun
+    )
 
     # проверка данных для внутренних таблиц
     iv_inner <- data_validation$init_val(this_nested_form_scheme, ns)
@@ -469,6 +503,93 @@ server <- function(input, output, session) {
     ))
   }
 
+  ## DT (nested) ---------------------------------
+  ### функция для отображения DT-таблицы для выбранной вложенной формы --------
+  show_modal_for_nested_form_dt <- function(con) {
+
+    # получение дата-фрейма
+    values$data <- db$read_df_from_db_by_id(
+      table_name = values$nested_form_id, 
+      main_key = values$main_key,
+      # nested_key = values$nested_key,
+      con = con
+    )
+
+    col_types <- SCHEMES_LIST[[values$nested_form_id]] |>
+      dplyr::distinct(form_id, form_type, form_label)
+
+    date_cols <- subset(col_types, form_type == "date", form_id, drop = TRUE)
+
+    values$data <- values$data |>
+      select(-main_key) |>
+      mutate(
+        dplyr::across(tidyselect::all_of({{date_cols}}), as.Date)
+      ) |>
+      arrange(nested_key)
+
+    output$dt_nested <- DT::renderDataTable(
+      DT::datatable(
+        values$data,
+        caption = 'Table 1: This is a simple caption for the table.',
+        rownames = FALSE,
+        # colnames = dplyr::pull(col_types, form_id, form_label),
+        extensions = c('KeyTable', "FixedColumns"),
+        editable = 'cell',
+        options = list(
+          dom = 'tip',
+          scrollX = TRUE,
+          fixedColumns = list(leftColumns = 1),
+          keys = TRUE
+        )
+      ) |>
+        DT::formatDate(date_cols, "toLocaleDateString")
+    )
+
+    showModal(modalDialog(
+      DT::dataTableOutput("dt_nested"),
+      size = "xl",
+      footer = tagList(
+        actionButton("nested_form_dt_save", "сохранить изменения")
+      ),
+      easyClose = TRUE
+    ))
+    
+  }
+
+  ### обновление данных при изменении --------------------
+  observeEvent(input$dt_nested_cell_edit, {
+    values$data <- DT::editData(values$data, input$dt_nested_cell_edit, 'dt_nested', rownames = FALSE)
+  })
+
+  ### кнопка: отображение -----------------------------
+  observeEvent(input$nested_form_dt_button, {
+    con <- db$make_db_connection("nested_form_save_button")
+    on.exit(db$close_db_connection(con, "nested_form_save_button"), add = TRUE)
+
+    show_modal_for_nested_form_dt(con)
+  })
+
+  ### кнопка: сохранить изменения --------------------
+  observeEvent(input$nested_form_dt_save, {
+  
+    con <- db$make_db_connection("nested_form_dt_save")
+    on.exit(db$close_db_connection(con, "nested_form_dt_save"), add = TRUE)
+
+    export_df <- values$data |>
+      distinct() |>
+      mutate(main_key = values$main_key, .before = 1)
+
+    db$write_df_to_db(
+      df = export_df,
+      table_name = values$nested_form_id,
+      scheme = SCHEMES_LIST[[values$nested_form_id]],
+      main_key = values$main_key,
+      nested_key = NULL,
+      con = con
+    )
+
+  })
+
   observeEvent(input$nested_form_close_button, {
     removeModal()
   })
@@ -479,7 +600,7 @@ server <- function(input, output, session) {
 
     con <- db$make_db_connection("nested_form_save_button")
     on.exit(db$close_db_connection(con, "nested_form_save_button"), add = TRUE)
-
+    
     # сохраняем данные основной формы!!!
     save_inputs_to_db(
       table_name        = "main",
@@ -512,7 +633,7 @@ server <- function(input, output, session) {
   })
 
   observeEvent(values$nested_key, {
-    
+
     con <- db$make_db_connection("nested_tables")
     on.exit(db$close_db_connection(con, "nested_tables"), add = TRUE)
 
@@ -543,7 +664,7 @@ server <- function(input, output, session) {
     removeModal()
 
     # та самая форма для ключа
-    scheme_for_key_input <- nested_forms_schemas_list[[values$nested_form_id]] |>
+    scheme_for_key_input <- SCHEMES_LIST[[values$nested_form_id]] |>
       dplyr::filter(form_id %in% c("nested_key"))
 
     ui1 <- rlang::exec(
@@ -593,7 +714,7 @@ server <- function(input, output, session) {
 
   # VALIDATIONS ============================
   # create new validator
-  iv_main <- data_validation$init_val(SCHEME_MAIN)
+  iv_main <- data_validation$init_val(SCHEMES_LIST[["main"]])
   iv_main$enable()
 
   # STATUSES ===============================
@@ -695,7 +816,7 @@ server <- function(input, output, session) {
   observeEvent(input$add_new_main_key_button, {
 
     # данные для главного ключа
-    scheme_for_key_input <- SCHEME_MAIN |>
+    scheme_for_key_input <- SCHEMES_LIST[["main"]] |>
       dplyr::filter(form_id == "main_key")
 
     # создать форму для выбора ключа
@@ -853,19 +974,19 @@ server <- function(input, output, session) {
         .x = purrr::set_names(c("main", unique(nested_forms_df$form_id))),
         .f = \(x) {
 
-          df <- read_df_from_db_all(x, con) %>%
+          df <- read_df_from_db_all(x, con) |>
             tibble::as_tibble()
 
           # handle with data
-          scheme <- if (x == "main") SCHEME_MAIN else nested_forms_schemas_list[[x]]
+          scheme <- SCHEMES_LIST[[x]]
 
-          data_columns   <- subset(scheme, form_type == "date", form_id, drop = TRUE)
+          date_columns   <- subset(scheme, form_type == "date", form_id, drop = TRUE)
           number_columns <- subset(scheme, form_type == "number", form_id, drop = TRUE)
 
           df <- df |>
             dplyr::mutate(
               # даты - к единому формату
-              dplyr::across(tidyselect::all_of({{data_columns}}), as.Date),
+              dplyr::across(tidyselect::all_of({{date_columns}}), as.Date),
               # числа - к единому формату десятичных значений
               dplyr::across(tidyselect::all_of({{number_columns}}), ~ gsub("\\.", "," , .x)),
             )
@@ -911,7 +1032,7 @@ server <- function(input, output, session) {
 
       # iterate by scheme parts
       purrr::walk(
-        .x = unique(SCHEME_MAIN$part),
+        .x = unique(SCHEMES_LIST[["main"]]$part),
         .f = \(x_iter1) {
           # write level 1 header
           HEADER_1 <- paste("#", x_iter1, "\n")
@@ -919,14 +1040,14 @@ server <- function(input, output, session) {
 
           # iterate by level2 headers (subgroups)
           purrr::walk(
-            .x = dplyr::pull(unique(subset(SCHEME_MAIN, part == x_iter1, "subgroup"))),
+            .x = dplyr::pull(unique(subset(SCHEMES_LIST[["main"]], part == x_iter1, "subgroup"))),
             .f = \(x_iter2) {
               # get header 2 name
               HEADER_2 <- paste("##", x_iter2, "\n")
 
               # for some reason set litle scheme...
               litle_scheme <- subset(
-                x = SCHEME_MAIN,
+                x = SCHEMES_LIST[["main"]],
                 subset = part == x_iter1 & subgroup == x_iter2,
                 select = c("form_id", "form_label", "form_type")
               ) |>

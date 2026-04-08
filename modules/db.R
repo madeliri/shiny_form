@@ -160,18 +160,52 @@ compare_existing_table_with_schema <- function(
 }
 
 #' @export
-write_df_to_db <- function(df, table_name, main_key, nested_key, con) {
+write_df_to_db <- function(df, table_name, scheme, main_key, nested_key, con) {
 
-  # if(!missing(nested_key)) del_query <- glue::glue("DELETE FROM {table_name} WHERE key = '{key}'")
+  date_columns   <- subset(scheme, form_type == "date", form_id, drop = TRUE)
+  number_columns <- subset(scheme, form_type == "number", form_id, drop = TRUE)
+
+  excel_to_db_dates_converter <- function(date) {
+
+    parse_date1 <- tryCatch(
+      as.Date(date, tryFormats = c("%Y-%m-%d")),
+      error = function(e) NULL
+    )
+    parse_date2 <- suppressWarnings(as.Date(as.numeric(date), origin = "1899-12-30"))
+
+    date <- if (!is.null(parse_date1)) {
+      parse_date1
+    } else if (!is.na(parse_date2)) {
+      parse_date2
+    } else {
+      date
+    }
+    
+    date <- as.character(format(date, "%Y-%m-%d"))
+  }
+
+  df <- df |>
+    dplyr::mutate(
+      # даты - к единому формату
+      dplyr::across(tidyselect::all_of({{date_columns}}), \(x) purrr::map_chr(x, excel_to_db_dates_converter)),
+      # числа - к единому формату десятичных значений
+      dplyr::across(tidyselect::all_of({{number_columns}}), ~ gsub("\\.", "," , .x)),
+    )
+
   if (table_name == "main") {
     del_query <- glue::glue("DELETE FROM main WHERE main_key = '{main_key}'")
-    DBI::dbExecute(con, del_query)
   }
 
   if (table_name != "main") {
-    del_query <- glue::glue("DELETE FROM '{table_name}' WHERE main_key = '{main_key}' AND nested_key = '{nested_key}'")
-    DBI::dbExecute(con, del_query)
+    if (is.null(nested_key)) {
+      del_query <- glue::glue("DELETE FROM '{table_name}' WHERE main_key = '{main_key}'")
+    } else {
+      del_query <- glue::glue("DELETE FROM '{table_name}' WHERE main_key = '{main_key}' AND nested_key = '{nested_key}'")
+    }
   }
+
+  deleted <- DBI::dbExecute(con, del_query)
+  cli::cli_alert_success("deleted {deleted} rows for '{main_key}' in '{table_name}")
 
   # записать данные
   DBI::dbWriteTable(con, table_name, df, append = TRUE)
@@ -195,11 +229,19 @@ read_df_from_db_by_id <- function(table_name, main_key, nested_key, con) {
   }
 
   if (table_name != "main") {
-    query <- glue::glue("
-      SELECT * 
-      FROM {table_name}
-      WHERE main_key = '{main_key}' AND nested_key = '{nested_key}'
-    ")
+    if(!missing(nested_key)) {
+      query <- glue::glue("
+        SELECT * 
+        FROM {table_name}
+        WHERE main_key = '{main_key}' AND nested_key = '{nested_key}'
+      ")
+    } else {
+      query <- glue::glue("
+        SELECT * 
+        FROM {table_name}
+        WHERE main_key = '{main_key}'
+      ")
+    }
   }
   DBI::dbGetQuery(con, query)
 }
