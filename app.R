@@ -10,6 +10,7 @@ suppressPackageStartupMessages({
 })
 
 source("helpers/functions.R")
+source("helpers/scheme_generator.R")
 
 # box::purge_cache()
 # box::use(./helpers/db)
@@ -40,106 +41,41 @@ rmarkdown::find_pandoc(dir = "/opt/homebrew/bin/")
 # TODO: dynamic button render depend on pandoc installation
 if (!rmarkdown::pandoc_available()) warning("Can't find pandoc!")
 
-load_scheme_from_xlsx <- function(
-  sheet_name
-) {
-
-  colnames <- switch(sheet_name,
-    "main" = c("part", "subgroup", "form_id", "form_label", "form_type"),
-    c("subgroup", "form_id", "form_label", "form_type")
-  )
-
-  readxl::read_xlsx(FILE_SCHEME, sheet = sheet_name) |>
-    # fill NA down
-    tidyr::fill(all_of(colnames), .direction = "down") |>
-    dplyr::group_by(form_id) |>
-    tidyr::fill(c(condition, required), .direction = "down") |>
-    dplyr::ungroup()
-
-}
-
-extract_forms_id_and_types_from_scheme <- function(scheme, drop_key = c("main_key", "nested_key")) {
-
-  drop_key <- match.arg(drop_key)
-
-  form_id_and_types_list <- scheme |>
-    dplyr::filter(!form_type %in% c("inline_table", "nested_forms","description", "description_header")) |>
-    dplyr::distinct(form_id, form_type) |>
-    tibble::deframe()
-
-  if(!drop_key %in% names(form_id_and_types_list)) cli::cli_abort("в схеме должно быть поле с ключем (key)")
-  form_id_and_types_list[names(form_id_and_types_list) != drop_key]
-
-}
-
 # SCHEME_MAIN UNPACK ==========================
-# load scheme
-SCHEMES_LIST <- list()
-SCHEMES_LIST[["main"]] <- load_scheme_from_xlsx("main")
+schm <- scheme_R6$new(FILE_SCHEME)
+object.size(schm)
+schm$get_key_id("main")
+schm$get_forms_ids("main")
+schm$get_all_ids("main")
 
-# get list of simple inputs
-main_id_and_types_list <- extract_forms_id_and_types_from_scheme(SCHEMES_LIST[["main"]])
+schm$get_schema("main")
 
-nested_forms_df <- SCHEMES_LIST[["main"]] |>
-  dplyr::filter(form_type == "nested_forms") |>
-  dplyr::distinct(form_id, .keep_all = TRUE)
+schm$get_id_type_list("allergo_anamnesis")
 
-# лист со схемами для всех вложенных формы
-purrr::walk(
+# active
+schm$get_main_key_id
+schm$all_tables_names
 
-  .x = purrr::set_names(unique(nested_forms_df$form_id)),
-  .f = \(nested_form_id) {
 
-    nested_form_scheme_sheet_name <- nested_forms_df |>
-      dplyr::filter(form_id == {nested_form_id}) |>
-      dplyr::pull(choices)
 
-    # загрузка схемы для данной вложенной формы
-    SCHEMES_LIST[[nested_form_id]] <<- load_scheme_from_xlsx(nested_form_scheme_sheet_name)
-
-  }
-)
 
 # establish connection
 con <- db$make_db_connection()
 
 # init DB (write dummy data to "main" table)
-db$check_if_table_is_exist_and_init_if_not("main", main_id_and_types_list)
-
-purrr::walk(
-  .x = unique(nested_forms_df$form_id),
-  .f = \(table_name) {
-
-    this_inline_table2_info <- nested_forms_df |>
-      dplyr::filter(form_id == {table_name})
-
-    # получение имя файла с таблицой
-    nested_form_scheme_sheet_name <- this_inline_table2_info$choices
-
-    # загрузка схемы для данной вложенной формы
-    this_nested_form_scheme <- load_scheme_from_xlsx(nested_form_scheme_sheet_name)
-
-    this_table_id_and_types_list <- extract_forms_id_and_types_from_scheme(this_nested_form_scheme, "nested_key")
-
-    db$check_if_table_is_exist_and_init_if_not(
-      table_name,
-      this_table_id_and_types_list,
-      con = con
-    )
-
-  }
-)
+# db$check_if_table_is_exist_and_init_if_not("main", main_id_and_types_list)
+db$check_if_table_is_exist_and_init_if_not(schm, con)
 
 # close connection to prevent data loss
 db$close_db_connection(con)
 
 # generate nav panels for each page
 nav_panels_list <- purrr::map(
-  .x = unique(SCHEMES_LIST[["main"]]$part),
+  .x = unique(schm$get_schema("main")$part),
   .f = \(page_name) {
 
     # отделить схему для каждой страницы
-    this_page_panels_scheme <- SCHEMES_LIST[["main"]] |>
+    this_page_panels_scheme <- schm$get_schema("main") |>
       dplyr::filter(!form_id %in% c("main_key", "nested_key")) |>
       dplyr::filter(part == {{page_name}})
 
@@ -269,7 +205,8 @@ server <- function(input, output, session) {
     ns, 
     con
   ) {
-    
+
+    nested_key_id <- schm$get_key_id(table_name)
     input_types <- unname(id_and_types_list)
     input_ids   <- names(id_and_types_list)
 
@@ -306,7 +243,7 @@ server <- function(input, output, session) {
     if (table_name == "main") {
       exported_df <- exported_df |>
         mutate(
-          main_key = values$main_key,
+          !!dplyr::sym(schm$get_main_key_id) := values$main_key,
           .before = 1
         )
     }
@@ -315,8 +252,8 @@ server <- function(input, output, session) {
     if (table_name != "main") {
       exported_df <- exported_df |>
         mutate(
-          main_key   = values$main_key,
-          nested_key = values$nested_key,
+          !!dplyr::sym(schm$get_main_key_id) := values$main_key,
+          !!dplyr::sym(nested_key_id) := values$nested_key,
           .before = 1
         )
     }
@@ -327,9 +264,9 @@ server <- function(input, output, session) {
     db$write_df_to_db(
       df = exported_df,
       table_name = table_name,
-      scheme = SCHEMES_LIST[[table_name]],
-      main_key = values$main_key,
-      nested_key = values$nested_key,
+      schm = schm,
+      main_key_value = values$main_key,
+      nested_key_value = values$nested_key,
       con = con
     )
   }
@@ -339,7 +276,7 @@ server <- function(input, output, session) {
   # ====================================
   ## кнопки для каждой вложенной таблицы -------------------------------
   purrr::walk(
-    .x = nested_forms_df$form_id,
+    .x = schm$nested_tables_names,
     .f = \(nested_form_id) {
 
       observeEvent(input[[nested_form_id]], {
@@ -350,7 +287,6 @@ server <- function(input, output, session) {
 
         values$nested_form_id <- nested_form_id
         values$nested_key     <- NULL # для нормальной работы реактивных значений
-
         show_modal_for_nested_form(con)
 
       })
@@ -363,8 +299,8 @@ server <- function(input, output, session) {
     ns <- NS(values$nested_form_id)
 
     # загрузка схемы для данной вложенной формы
-    this_nested_form_scheme <- SCHEMES_LIST[[values$nested_form_id]]
-    values$nested_id_and_types <- extract_forms_id_and_types_from_scheme(this_nested_form_scheme, "nested_key")
+    this_nested_form_scheme <-  schm$get_schema(values$nested_form_id)
+    values$nested_id_and_types <- schm$get_id_type_list(values$nested_form_id)
 
     # мини-схема для ключа
     this_nested_form_key_scheme <- subset(this_nested_form_scheme, form_id == "nested_key")
@@ -451,7 +387,7 @@ server <- function(input, output, session) {
       con = con
     )
 
-    col_types <- SCHEMES_LIST[[values$nested_form_id]] |>
+    col_types <- schm$get_schema(values$nested_form_id) |>
       dplyr::distinct(form_id, form_type, form_label)
 
     date_cols <- subset(col_types, form_type == "date", form_id, drop = TRUE)
@@ -518,9 +454,9 @@ server <- function(input, output, session) {
     db$write_df_to_db(
       df = export_df,
       table_name = values$nested_form_id,
-      scheme = SCHEMES_LIST[[values$nested_form_id]],
-      main_key = values$main_key,
-      nested_key = NULL,
+      schm = schm,
+      main_key_value = values$main_key,
+      nested_key_value = NULL,
       con = con
     )
 
@@ -540,7 +476,7 @@ server <- function(input, output, session) {
     # сохраняем данные основной формы!!!
     save_inputs_to_db(
       table_name        = "main",
-      id_and_types_list = main_id_and_types_list,
+      id_and_types_list = schm$get_id_type_list("main"),
       con               = con
     )
 
@@ -600,7 +536,7 @@ server <- function(input, output, session) {
     removeModal()
 
     # та самая форма для ключа
-    scheme_for_key_input <- SCHEMES_LIST[[values$nested_form_id]] |>
+    scheme_for_key_input <- schm$get_schema(values$nested_form_id) |>
       dplyr::filter(form_id %in% c("nested_key"))
 
     ui1 <- rlang::exec(
@@ -650,7 +586,7 @@ server <- function(input, output, session) {
 
   # VALIDATIONS ============================
   # create new validator
-  iv_main <- data_validation$init_val(SCHEMES_LIST[["main"]])
+  iv_main <- data_validation$init_val(schm$get_schema("main"))
   iv_main$enable()
 
   # STATUSES ===============================
@@ -673,7 +609,7 @@ server <- function(input, output, session) {
   observeEvent(input$add_new_main_key_button, {
 
     # данные для главного ключа
-    scheme_for_key_input <- SCHEMES_LIST[["main"]] |>
+    scheme_for_key_input <- schm$get_schema("main") |>
       dplyr::filter(form_id == "main_key")
 
     # создать форму для выбора ключа
@@ -714,7 +650,7 @@ server <- function(input, output, session) {
     }
     
     values$main_key <- input$main_key
-    utils$clean_forms(main_id_and_types_list)
+    utils$clean_forms(schm$get_id_type_list("main"))
 
     removeModal()
   })
@@ -729,7 +665,7 @@ server <- function(input, output, session) {
   observeEvent(input$clean_all_action, {
     
     # rewrite all inputs with empty data
-    utils$clean_forms(main_id_and_types_list)
+    utils$clean_forms(schm$get_id_type_list("main"))
 
     removeModal()
     showNotification("Данные очищены!", type = "warning")
@@ -744,7 +680,7 @@ server <- function(input, output, session) {
 
     save_inputs_to_db(
       table_name = "main",
-      id_and_types_list = main_id_and_types_list,
+      id_and_types_list = schm$get_id_type_list("main"),
       con = con
     )
 
@@ -811,7 +747,7 @@ server <- function(input, output, session) {
 
     load_data_to_form(
       df = df,
-      id_and_types_list = main_id_and_types_list
+      id_and_types_list = schm$get_id_type_list("main")
     )
   
     values$main_key <- input$load_data_key_selector
@@ -829,14 +765,14 @@ server <- function(input, output, session) {
 
       # get all data
       list_of_df <- purrr::map(
-        .x = purrr::set_names(c("main", unique(nested_forms_df$form_id))),
+        .x = purrr::set_names(schm$all_tables_names),
         .f = \(x) {
 
           df <- read_df_from_db_all(x, con) |>
             tibble::as_tibble()
 
           # handle with data
-          scheme <- SCHEMES_LIST[[x]]
+          scheme <- schm$get_schema(x)
 
           date_columns   <- subset(scheme, form_type == "date", form_id, drop = TRUE)
           number_columns <- subset(scheme, form_type == "number", form_id, drop = TRUE)
@@ -890,7 +826,7 @@ server <- function(input, output, session) {
 
       # iterate by scheme parts
       purrr::walk(
-        .x = unique(SCHEMES_LIST[["main"]]$part),
+        .x = unique(schm$get_schema("main")$part),
         .f = \(x_iter1) {
           # write level 1 header
           HEADER_1 <- paste("#", x_iter1, "\n")
@@ -898,14 +834,14 @@ server <- function(input, output, session) {
 
           # iterate by level2 headers (subgroups)
           purrr::walk(
-            .x = dplyr::pull(unique(subset(SCHEMES_LIST[["main"]], part == x_iter1, "subgroup"))),
+            .x = dplyr::pull(unique(subset(schm$get_schema("main"), part == x_iter1, "subgroup"))),
             .f = \(x_iter2) {
               # get header 2 name
               HEADER_2 <- paste("##", x_iter2, "\n")
 
               # for some reason set litle scheme...
               litle_scheme <- subset(
-                x = SCHEMES_LIST[["main"]],
+                x = schm$get_schema("main"),
                 subset = part == x_iter1 & subgroup == x_iter2,
                 select = c("form_id", "form_label", "form_type")
               ) |>
@@ -989,30 +925,31 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$button_upload_data_from_xlsx_confirm, {
-    req(input$upload_xlsx
-    )
+    req(input$upload_xlsx)
+
     con <- db$make_db_connection("button_upload_data_from_xlsx_confirm")
     on.exit(db$close_db_connection(con, "button_upload_data_from_xlsx_confirm"), add = TRUE)
 
     file <- input$upload_xlsx$datapath
-    # print(file)
     wb <- openxlsx2::wb_load(file)
 
     # проверка на наличие всех листов в файле
-    if (!all(names(SCHEMES_LIST) %in% openxlsx2::wb_get_sheet_names(wb))) {
+    if (!all(schm$all_tables_names %in% openxlsx2::wb_get_sheet_names(wb))) {
       cli::cli_alert_warning("данные в файле '{file} не соответствуют схеме'")
       return()
     }
 
     # проверка схемы --------------
-    for (table_name in names(SCHEMES_LIST)) {
+    for (table_name in schm$all_tables_names) {
 
       df     <- openxlsx2::read_xlsx(wb, table_name) 
-      scheme <- SCHEMES_LIST[[table_name]] |>
+      scheme <- schm$get_schema(table_name) |>
         filter(!form_type %in% c("description", "nested_forms"))
 
       # столбцы в таблицы и схема
       df_to_schema_compare <- setdiff(colnames(df), unique(scheme$form_id))
+      schema_to_df_compare <- setdiff(unique(scheme$form_id), colnames(df))
+
       if (length(schema_to_df_compare) > 0 ) {
         cli::cli_warn(c("в схеме для '{table_name}' нет следующих столбцов:", paste("- ", df_to_schema_compare)))
       }
@@ -1030,10 +967,10 @@ server <- function(input, output, session) {
     }
 
     # обновление данных
-    for (table_name in names(SCHEMES_LIST)) {
+    for (table_name in schm$all_tables_names) {
 
       df     <- openxlsx2::read_xlsx(wb, table_name) 
-      scheme <- SCHEMES_LIST[[table_name]] |>
+      scheme <- schm$get_schema(table_name) |>
         filter(!form_type %in% c("description", "nested_forms"))
 
       date_columns <- subset(scheme, form_type == "date", form_id, drop = TRUE)

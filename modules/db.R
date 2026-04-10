@@ -24,43 +24,57 @@ close_db_connection <- function(con, where = "") {
 #' @description
 #' Проверить если таблица есть в базе данных и инициировать ее, если от
 check_if_table_is_exist_and_init_if_not <- function(
-  table_name,
-  forms_id_type_list,
+  schm,
   con = rlang::env_get(rlang::caller_env(), nm = "con")
 ) {
 
-  if (table_name %in% DBI::dbListTables(con)) {
+  main_key <- schm$get_main_key_id
 
-    cli::cli_inform(c("*" = "таблица есть такая: '{table_name}'"))
+  purrr::walk(
+    .x = schm$all_tables_names,
+    .f = \(table_name, con) {
 
-    # если таблица существует, производим проверку структуры таблицы
-    compare_existing_table_with_schema(table_name, forms_id_type_list)
+      forms_id_type_list <- schm$get_id_type_list(table_name)
+      key_name           <- schm$get_key_id(table_name)
 
-  } else {
+      if (table_name %in% DBI::dbListTables(con)) {
 
-    if (table_name == "main") {
-      dummy_df <- dplyr::mutate(
-        get_dummy_df(forms_id_type_list), 
-        main_key = "dummy",
-        .before = 1
-      )
-    }
-    if (table_name != "main") {
-      dummy_df <- get_dummy_df(forms_id_type_list) |>
-        dplyr::mutate(
-          main_key = "dummy",
-          nested_key = "dummy",
-          .before = 1
+        cli::cli_inform(c("*" = "таблица есть такая: '{table_name}'"))
+
+        # если таблица существует, производим проверку структуры таблицы
+        compare_existing_table_with_schema(
+          table_name = table_name,
+          schm = schm
         )
-    }
 
-    # write dummy df into base, then delete dummy row
-    DBI::dbWriteTable(con, table_name, dummy_df, append = TRUE)
-    DBI::dbExecute(con, glue::glue("DELETE FROM {table_name} WHERE main_key = 'dummy'"))
+      } else {
 
-    cli::cli_alert_success("таблица '{table_name}' успешно создана")
-  }
+        if (table_name == "main") {
+          dummy_df <- get_dummy_df(forms_id_type_list) |>
+            dplyr::mutate(
+              !!dplyr::sym(main_key) := "dummy",
+              .before = 1
+            )
+        }
+        if (table_name != "main") {
+          dummy_df <- get_dummy_df(forms_id_type_list) |>
+            dplyr::mutate(
+              !!dplyr::sym(main_key) := "dummy",
+              !!dplyr::sym(key_name) := "dummy",
+              .before = 1
+            )
+        }
 
+        # write dummy df into base, then delete dummy row
+        DBI::dbWriteTable(con, table_name, dummy_df, append = TRUE)
+        DBI::dbExecute(con, glue::glue("DELETE FROM {table_name} WHERE {main_key} = 'dummy'"))
+
+        cli::cli_alert_success("таблица '{table_name}' успешно создана")
+      }
+    },
+    con = con
+  )
+  
 }
 
 #' @description
@@ -96,45 +110,47 @@ get_dummy_df <- function(forms_id_type_list) {
 #' коррекции таблицы
 compare_existing_table_with_schema <- function(
   table_name,
-  forms_id_type_list,
+  schm,
   con = rlang::env_get(rlang::caller_env(), nm = "con")
 ) {
 
-  forms_id_type_list_names <- names(forms_id_type_list)
+  main_key  <- schm$get_main_key_id
+  key_id    <- schm$get_key_id(table_name)
+  forms_ids <- schm$get_forms_ids(table_name)
 
   if (table_name == "main") {
-    forms_id_type_list_names <- c("main_key", forms_id_type_list_names)
+    all_ids_from_schema <- c(main_key, forms_ids)
   } else {
-    forms_id_type_list_names <- c("main_key", "nested_key", forms_id_type_list_names)
+    all_ids_from_schema <- c(main_key, key_id, forms_ids)
   }
 
   options(box.path = here::here())
   box::use(modules/utils)
 
   # checking if db structure in form compatible with alrady writed data (in case on changig form)
-  if (identical(colnames(DBI::dbReadTable(con, table_name)), forms_id_type_list_names)) {
+  if (identical(colnames(DBI::dbReadTable(con, table_name)), all_ids_from_schema)) {
     # ...
   } else {
 
     df_to_rewrite <- DBI::dbReadTable(con, table_name)
-    form_base_difference <- setdiff(forms_id_type_list_names, colnames(df_to_rewrite))
-    base_form_difference <- setdiff(colnames(df_to_rewrite), forms_id_type_list_names)
+    form_base_difference <- setdiff(all_ids_from_schema, colnames(df_to_rewrite))
+    base_form_difference <- setdiff(colnames(df_to_rewrite), all_ids_from_schema)
 
     # if lengths are equal
-    if (length(forms_id_type_list_names) == length(colnames(df_to_rewrite)) &&
+    if (length(all_ids_from_schema) == length(colnames(df_to_rewrite)) &&
           length(form_base_difference) == 0 &&
           length(base_form_difference) == 0) {
       cli::cli_warn("changes in scheme file detected: assuming order changed only")
-      print(forms_id_type_list_names)
+      print(all_ids_from_schema)
     }
 
-    if (length(forms_id_type_list_names) == length(colnames(df_to_rewrite)) &&
+    if (length(all_ids_from_schema) == length(colnames(df_to_rewrite)) &&
           length(form_base_difference) != 0 &&
           length(base_form_difference) != 0) {
       cli::cli_abort("changes in scheme file detected: structure has been changed")
     }
 
-    if (length(forms_id_type_list_names) > length(colnames(df_to_rewrite)) && length(form_base_difference) != 0) {
+    if (length(all_ids_from_schema) > length(colnames(df_to_rewrite)) && length(form_base_difference) != 0) {
       cli::cli_warn("changes in scheme file detected: new inputs form was added")
       cli::cli_warn("trying to adapt database")
 
@@ -146,13 +162,13 @@ compare_existing_table_with_schema <- function(
 
       # reorder due to scheme
       df_to_rewrite <- df_to_rewrite |>
-        dplyr::select(dplyr::all_of(forms_id_type_list_names))
+        dplyr::select(dplyr::all_of(all_ids_from_schema))
 
       DBI::dbWriteTable(con, table_name, df_to_rewrite, overwrite = TRUE)
-      DBI::dbExecute(con, glue::glue("DELETE FROM {table_name} WHERE main_key = 'dummy'"))
+      DBI::dbExecute(con, glue::glue("DELETE FROM {table_name} WHERE {main_key} = 'dummy'"))
     }
 
-    if (length(forms_id_type_list_names) < length(colnames(df_to_rewrite))) {
+    if (length(all_ids_from_schema) < length(colnames(df_to_rewrite))) {
       cli::cli_abort("changes in scheme file detected: some of inputs form was deleted! it may cause data loss!")
     }
     
@@ -160,7 +176,18 @@ compare_existing_table_with_schema <- function(
 }
 
 #' @export
-write_df_to_db <- function(df, table_name, scheme, main_key, nested_key, con) {
+write_df_to_db <- function(
+  df, 
+  table_name, 
+  schm,
+  main_key_value, 
+  nested_key_value, 
+  con
+) {
+
+  scheme         <- schm$get_schema(table_name)
+  main_key_id    <- schm$get_main_key_id
+  nested_key_id  <- schm$get_key_id(table_name)
 
   date_columns   <- subset(scheme, form_type == "date", form_id, drop = TRUE)
   number_columns <- subset(scheme, form_type == "number", form_id, drop = TRUE)
@@ -174,25 +201,25 @@ write_df_to_db <- function(df, table_name, scheme, main_key, nested_key, con) {
     )
 
   if (table_name == "main") {
-    del_query <- glue::glue("DELETE FROM main WHERE main_key = '{main_key}'")
+    del_query <- glue::glue("DELETE FROM main WHERE {main_key_id} = '{main_key_value}'")
   }
 
   if (table_name != "main") {
-    if (is.null(nested_key)) {
-      del_query <- glue::glue("DELETE FROM '{table_name}' WHERE main_key = '{main_key}'")
+    if (is.null(nested_key_value)) {
+      del_query <- glue::glue("DELETE FROM '{table_name}' WHERE {main_key_id} = '{main_key_value}'")
     } else {
-      del_query <- glue::glue("DELETE FROM '{table_name}' WHERE main_key = '{main_key}' AND nested_key = '{nested_key}'")
+      del_query <- glue::glue("DELETE FROM '{table_name}' WHERE {main_key_id} = '{main_key_value}' AND {nested_key_id} = '{nested_key_value}'")
     }
   }
 
   deleted <- DBI::dbExecute(con, del_query)
-  cli::cli_alert_success("deleted {deleted} rows for '{main_key}' in '{table_name}")
+  cli::cli_alert_success("deleted {deleted} rows for '{main_key_value}' in '{table_name}")
 
   # записать данные
   DBI::dbWriteTable(con, table_name, df, append = TRUE)
 
   # report
-  cli::cli_alert_success("данные для '{main_key}' в таблице '{table_name}' успешно обновлены")
+  cli::cli_alert_success("данные для '{main_key_value}' в таблице '{table_name}' успешно обновлены")
 
 }
 
