@@ -76,7 +76,7 @@ nav_panels_list <- purrr::map(
 
     # отделить схему для каждой страницы
     this_page_panels_scheme <- schm$get_schema("main") |>
-      dplyr::filter(!form_id %in% c("main_key", "nested_key")) |>
+      dplyr::filter(!form_id %in% schm$get_main_key_id) |>
       dplyr::filter(part == {{page_name}})
 
     this_page_panels <- utils$make_panels(this_page_panels_scheme)
@@ -297,17 +297,18 @@ server <- function(input, output, session) {
   show_modal_for_nested_form <- function(con) {
 
     ns <- NS(values$nested_form_id)
+    key_id <- schm$get_key_id(values$nested_form_id)
 
     # загрузка схемы для данной вложенной формы
     this_nested_form_scheme <-  schm$get_schema(values$nested_form_id)
     values$nested_id_and_types <- schm$get_id_type_list(values$nested_form_id)
 
     # мини-схема для ключа
-    this_nested_form_key_scheme <- subset(this_nested_form_scheme, form_id == "nested_key")
+    this_nested_form_key_scheme <- subset(this_nested_form_scheme, form_id == key_id)
     if (nrow(this_nested_form_key_scheme) > 1) cli::cli_abort("количество строк не может быть больше одного для ключа")
 
     # выбираем все ключи из баз данных
-    kyes_for_this_table <- db$get_nested_keys_from_table(values$nested_form_id, values$main_key, con)
+    kyes_for_this_table <- db$get_nested_keys_from_table(values$nested_form_id, schm, values$main_key, con)
     kyes_for_this_table <- unique(c(values$nested_key, kyes_for_this_table))
     values$nested_key <- if (length(kyes_for_this_table) == 0) NULL else kyes_for_this_table[[1]]
 
@@ -327,7 +328,7 @@ server <- function(input, output, session) {
 
           subroup_scheme <- this_nested_form_scheme |>
             dplyr::filter(subgroup == {{subgroup}}) |>
-            dplyr::filter(!form_id %in% c("main_key", "nested_key"))
+            dplyr::filter(form_id != key_id)
 
           bslib::nav_panel(
             title = subgroup,
@@ -379,11 +380,13 @@ server <- function(input, output, session) {
   ### функция для отображения DT-таблицы для выбранной вложенной формы --------
   show_modal_for_nested_form_dt <- function(con) {
 
+    key_id <- schm$get_key_id(values$nested_form_id)
+
     # получение дата-фрейма
     values$data <- db$read_df_from_db_by_id(
       table_name = values$nested_form_id, 
-      main_key = values$main_key,
-      # nested_key = values$nested_key,
+      schm,
+      main_key_value = values$main_key,
       con = con
     )
 
@@ -393,11 +396,11 @@ server <- function(input, output, session) {
     date_cols <- subset(col_types, form_type == "date", form_id, drop = TRUE)
 
     values$data <- values$data |>
-      select(-main_key) |>
+      select(-schm$get_main_key_id) |>
       mutate(
         dplyr::across(tidyselect::all_of({{date_cols}}), as.Date)
       ) |>
-      arrange(nested_key)
+      arrange({{key_id}})
 
     output$dt_nested <- DT::renderDataTable(
       DT::datatable(
@@ -448,13 +451,13 @@ server <- function(input, output, session) {
     on.exit(db$close_db_connection(con, "nested_form_dt_save"), add = TRUE)
 
     export_df <- values$data |>
-      distinct() |>
-      mutate(main_key = values$main_key, .before = 1)
+      dplyr::distinct() |>
+      dplyr::mutate(!!dplyr::sym(schm$get_main_key_id) := values$main_key, .before = 1)
 
     db$write_df_to_db(
       df = export_df,
       table_name = values$nested_form_id,
-      schm = schm,
+      schm,
       main_key_value = values$main_key,
       nested_key_value = NULL,
       con = con
@@ -509,15 +512,16 @@ server <- function(input, output, session) {
     con <- db$make_db_connection("nested_tables")
     on.exit(db$close_db_connection(con, "nested_tables"), add = TRUE)
 
-    kyes_for_this_table <- db$get_nested_keys_from_table(values$nested_form_id, values$main_key, con)
+    kyes_for_this_table <- db$get_nested_keys_from_table(values$nested_form_id, schm, values$main_key, con)
 
     if (values$nested_key %in% kyes_for_this_table) {
 
       # выгрузка датафрейма по общим и вложенным ключам
       df <- db$read_df_from_db_by_id(
-        table_name = values$nested_form_id, 
-        main_key = values$main_key,
-        nested_key = values$nested_key,
+        table_name = values$nested_form_id,
+        schm,
+        main_key_value   = values$main_key,
+        nested_key_value = values$nested_key,
         con = con
       )
 
@@ -537,7 +541,7 @@ server <- function(input, output, session) {
 
     # та самая форма для ключа
     scheme_for_key_input <- schm$get_schema(values$nested_form_id) |>
-      dplyr::filter(form_id %in% c("nested_key"))
+      dplyr::filter(form_id == schm$get_key_id(values$nested_form_id))
 
     ui1 <- rlang::exec(
       .fn = utils$render_forms, 
@@ -558,18 +562,19 @@ server <- function(input, output, session) {
 
   # действие при подтверждении создания новой записи
   observeEvent(input$confirm_create_new_nested_key, {
-    req(input$nested_key)
+    req(input[[schm$get_key_id(values$nested_form_id)]])
 
     con <- db$make_db_connection("confirm_create_new_key")
     on.exit(db$close_db_connection(con, "confirm_create_new_key"), add = TRUE)
 
     existed_key <- db$get_nested_keys_from_table(
-      table_name = values$nested_form_id, 
-      main_key = values$main_key, 
+      table_name = values$nested_form_id,
+      schm,
+      main_key_value = values$main_key,
       con
     )
 
-    if (input$nested_key %in% existed_key) {
+    if (input[[schm$get_key_id(values$nested_form_id)]] %in% existed_key) {
       showNotification(
         sprintf("В базе уже запись с данным ключем."),
         type = "error"
@@ -577,7 +582,7 @@ server <- function(input, output, session) {
       return()
     }
     
-    values$nested_key <- input$nested_key
+    values$nested_key <- input[[schm$get_key_id(values$nested_form_id)]]
     utils$clean_forms(values$nested_id_and_types, NS(values$nested_form_id))
     removeModal()
     show_modal_for_nested_form(con)
@@ -610,7 +615,7 @@ server <- function(input, output, session) {
 
     # данные для главного ключа
     scheme_for_key_input <- schm$get_schema("main") |>
-      dplyr::filter(form_id == "main_key")
+      dplyr::filter(form_id == schm$get_main_key_id)
 
     # создать форму для выбора ключа
     ui1 <- rlang::exec(
@@ -633,15 +638,16 @@ server <- function(input, output, session) {
 
   ## действие при подтверждении (проверка нового создаваемого ключа) -------
   observeEvent(input$confirm_create_new_main_key, {
-    req(input$main_key)
+    req(input[[schm$get_main_key_id]])
 
     con <- db$make_db_connection("confirm_create_new_main_key")
     on.exit(db$close_db_connection(con, "confirm_create_new_key"), add = TRUE)
 
-    existed_key <- db$get_keys_from_table("main", con)
+    existed_key <- db$get_keys_from_table("main", schm, con)
+    print(existed_key)
     
     # если введенный ключ уже есть в базе
-    if (input$main_key %in% existed_key) {
+    if (input[[schm$get_main_key_id]] %in% existed_key) {
       showNotification(
         sprintf("В базе уже запись с данным ключем."),
         type = "error"
@@ -649,7 +655,7 @@ server <- function(input, output, session) {
       return()
     }
     
-    values$main_key <- input$main_key
+    values$main_key <- input[[schm$get_main_key_id]]
     utils$clean_forms(schm$get_id_type_list("main"))
 
     removeModal()
@@ -692,13 +698,14 @@ server <- function(input, output, session) {
 
   ## список ключей для загрузки данных -------------------
   observeEvent(input$load_data_button, {
+
     con <- db$make_db_connection("load_data_button")
     on.exit(db$close_db_connection(con, "load_data_button"))
 
     if (length(dbListTables(con)) != 0 && "main" %in% DBI::dbListTables(con)) {
 
       # GET DATA files
-      ids <- db$get_keys_from_table("main", con)
+      ids <- db$get_keys_from_table("main", schm, con)
 
       ui_load_menu <- renderUI({
         selectizeInput(
@@ -741,7 +748,8 @@ server <- function(input, output, session) {
 
     df <- db$read_df_from_db_by_id(
       table_name = "main", 
-      main_key = input$load_data_key_selector,
+      schm = schm,
+      main_key_value = input$load_data_key_selector,
       con = con
     )
 
@@ -933,6 +941,8 @@ server <- function(input, output, session) {
     file <- input$upload_xlsx$datapath
     wb <- openxlsx2::wb_load(file)
 
+    main_key_id <- schm$get_main_key_id
+
     # проверка на наличие всех листов в файле
     if (!all(schm$all_tables_names %in% openxlsx2::wb_get_sheet_names(wb))) {
       cli::cli_alert_warning("данные в файле '{file} не соответствуют схеме'")
@@ -980,7 +990,7 @@ server <- function(input, output, session) {
           # даты - к единому формату
           dplyr::across(tidyselect::all_of({{date_columns}}), \(x) purrr::map_chr(x, db$excel_to_db_dates_converter)),
         ) |>
-        select(all_of(unique(c("main_key", scheme$form_id))))
+        select(all_of(unique(c(main_key_id, scheme$form_id))))
 
       df_original <- DBI::dbReadTable(con, table_name) |>
         as_tibble()
@@ -988,11 +998,11 @@ server <- function(input, output, session) {
       if (input$upload_data_from_xlsx_owerwrite_all_data == TRUE) cli::cli_abort("not implemented yet")
 
       walk(
-        .x = unique(df$main_key),
+        .x = unique(df[[main_key_id]]),
         .f = \(main_key) {
 
-          if (main_key %in% unique(df_original$main_key)) {
-            DBI::dbExecute(con, glue::glue("DELETE FROM {table_name} WHERE main_key = '{main_key}'"))
+          if (main_key %in% unique(df_original[[main_key_id]])) {
+            DBI::dbExecute(con, glue::glue("DELETE FROM {table_name} WHERE {main_key_id} = '{main_key}'"))
           }
         }
       )

@@ -225,29 +225,38 @@ write_df_to_db <- function(
 
 #' @export
 #' reading tables from db by name and id ========
-read_df_from_db_by_id <- function(table_name, main_key, nested_key, con) {
+read_df_from_db_by_id <- function(
+  table_name,
+  schm,
+  main_key_value, 
+  nested_key_value, 
+  con
+) {
+
+  main_key_id <- schm$get_main_key_id
 
   # check if this table exist
   if (table_name == "main") {
     query <- glue::glue("
       SELECT * 
       FROM main
-      WHERE main_key = '{main_key}'
+      WHERE {main_key_id} = '{main_key_value}'
     ")
   }
 
   if (table_name != "main") {
-    if(!missing(nested_key)) {
+    if(!missing(nested_key_value)) {
+      key_id <- schm$get_key_id(table_name)
       query <- glue::glue("
         SELECT * 
         FROM {table_name}
-        WHERE main_key = '{main_key}' AND nested_key = '{nested_key}'
+        WHERE {main_key_id} = '{main_key_value}' AND {key_id} = '{nested_key_value}'
       ")
     } else {
       query <- glue::glue("
         SELECT * 
         FROM {table_name}
-        WHERE main_key = '{main_key}'
+        WHERE {main_key_id} = '{main_key_value}'
       ")
     }
   }
@@ -255,17 +264,21 @@ read_df_from_db_by_id <- function(table_name, main_key, nested_key, con) {
 }
 
 #' @export
-get_keys_from_table <- function(table_name, con) {
+get_keys_from_table <- function(table_name, schm, con) {
 
-  DBI::dbGetQuery(con, glue::glue("SELECT DISTINCT main_key FROM {table_name}")) |>
+  main_key_id <- schm$get_main_key_id
+  DBI::dbGetQuery(con, glue::glue("SELECT DISTINCT {main_key_id} FROM {table_name}")) |>
     dplyr::pull()
 
 }
 
 #' @export
-get_nested_keys_from_table <- function(table_name, main_key, con) {
+get_nested_keys_from_table <- function(table_name, schm, main_key_value, con) {
 
-  DBI::dbGetQuery(con, glue::glue("SELECT DISTINCT nested_key FROM {table_name} WHERE main_key == '{main_key}'")) |>
+  main_key_id <- schm$get_main_key_id
+  key_id <- schm$get_key_id(table_name)
+
+  DBI::dbGetQuery(con, glue::glue("SELECT DISTINCT {key_id} FROM {table_name} WHERE {main_key_id} == '{main_key_value}'")) |>
     dplyr::pull()
 
 }
@@ -275,15 +288,26 @@ get_nested_keys_from_table <- function(table_name, main_key, con) {
 #' @export
 excel_to_db_dates_converter <- function(date) {
 
-  if(is.na(date)) return(NA)
+  if (is.na(date)) return(NA)
   # cli::cli_inform("date: {date} | nchar: {nchar(date)} | typeof: {typeof(date)}")
 
   # если текст, количество символов 7, и маска соответствует 'MM.YYYY'
-  if (typeof(date) == "character" & nchar(date) == 4 & grepl("((?:19|20)\\d\\d)", date)) {
-    date <- sprintf("%s-01-01", date)
-  } else if (typeof(date) == "character" & nchar(date) == 7 & grepl("(0?[1-9]|1[012])\\.((?:19|20)\\d\\d)", date)) {
-    # если текст, количество символов 7, и маска соответствует 'MM.YYYY'
-    date <- sprintf("01.%s", date)
+  if (typeof(date) == "character") {
+    date <- trimws(date)
+
+    if (nchar(date) == 4 & grepl("((?:19|20)\\d\\d)", date)) {
+      date <- sprintf("%s-01-01", date)
+    } else if (nchar(date) == 7 & grepl("(0?[1-9]|1[012])\\.((?:19|20)\\d\\d)", date)) {
+      # если текст, количество символов 7, и маска соответствует 'MM.YYYY'
+      date <- sprintf("01.%s", date)
+    } else if (nchar(date) == 10 & grepl("([12][0-9]|3[01]|0?[1-9])\\.(0?[1-9]|1[012])\\.((?:19|20)\\d\\d)", date)) {
+      # ...
+    } else if (nchar(date) == 10 & grepl("((?:19|20)\\d\\d)-(0?[1-9]|1[012])-([12][0-9]|3[01]|0?[1-9])", date)) {
+      # ...
+    } else {
+      cli::cli_alert_warning("can't compute date from '{date}'")
+      return(date)
+    }
   }
 
   parse_date1 <- tryCatch(
@@ -292,7 +316,7 @@ excel_to_db_dates_converter <- function(date) {
   )
   parse_date2 <- suppressWarnings(as.Date(as.numeric(date), origin = "1899-12-30"))
 
-  date <- if (!is.null(parse_date1)) {
+  fin_date <- if (!is.null(parse_date1)) {
     parse_date1
   } else if (!is.na(parse_date2)) {
     parse_date2
@@ -300,6 +324,6 @@ excel_to_db_dates_converter <- function(date) {
     date
   }
   
-  date <- as.character(format(date, "%Y-%m-%d"))
-  date
+  fin_date <- as.character(format(fin_date, "%Y-%m-%d"))
+  fin_date
 }
