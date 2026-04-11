@@ -111,15 +111,6 @@ ui <- page_sidebar(
 
 # MODALS ========================
 # окно для подвтерждения очищения данных
-modal_clean_all <- modalDialog(
-  "Данное действие очистит все заполненные данные. Убедитесь, что нужные данные сохранены.",
-  title = "Очистить форму?",
-  footer = tagList(
-    actionButton("cancel_button", "Отмена"),
-    actionButton("clean_all_action", "Очистить.", class = "btn btn-danger")
-  ),
-  easyClose = TRUE
-)
 
 # init auth =======================
 if (AUTH_ENABLED) ui <- shinymanager::secure_app(ui, enable_admin = TRUE)
@@ -669,7 +660,15 @@ server <- function(input, output, session) {
   ## очистка всех полей -----------------------
   # show modal on click of button
   observeEvent(input$clean_data_button, {
-    showModal(modal_clean_all)
+    showModal(modalDialog(
+      "Данное действие очистит все заполненные данные. Убедитесь, что нужные данные сохранены.",
+      title = "Очистить форму?",
+      footer = tagList(
+        actionButton("cancel_button", "Отмена"),
+        actionButton("clean_all_action", "Очистить.", class = "btn btn-danger")
+      ),
+      easyClose = TRUE
+    ))
   })
 
   # when action confirm - perform action
@@ -677,6 +676,7 @@ server <- function(input, output, session) {
     
     # rewrite all inputs with empty data
     utils$clean_forms(schm$get_id_type_list("main"))
+    values$main_key <- NULL
 
     removeModal()
     showNotification("Данные очищены!", type = "warning")
