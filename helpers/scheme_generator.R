@@ -76,6 +76,7 @@ scheme_R6 <- R6::R6Class(
       private$schemes_list[[table_name]]
     },
     get_id_type_list = function(table_name) {
+
       # wo main key
       this_key_id <- self$get_key_id(table_name)
 

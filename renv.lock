@@ -318,16 +318,6 @@
       "Repository": "CRAN",
       "Hash": "14eb0596f987c71535d07c3aff814742"
     },
-    "config": {
-      "Package": "config",
-      "Version": "0.3.2",
-      "Source": "Repository",
-      "Repository": "RSPM",
-      "Requirements": [
-        "yaml"
-      ],
-      "Hash": "8b7222e9d9eb5178eea545c0c4d33fc2"
-    },
     "cpp11": {
       "Package": "cpp11",
       "Version": "0.5.1",

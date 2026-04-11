@@ -187,7 +187,7 @@ render_forms <- function(
 
   # description part
   if (form_type == "description") {
-    if(is.na(form_label)) {
+    if (is.na(form_label)) {
       form <- shiny::hr(style = "margin-bottom: -3px;")
     } else {
       form <- shiny::div(shiny::HTML(form_label), style = "color: Gray; font-size: 90%;")

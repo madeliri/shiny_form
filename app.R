@@ -16,10 +16,8 @@ source("helpers/scheme_generator.R")
 # box::use(./helpers/db)
 
 # SOURCE FILES ============================
-config <- config::get(file = "configs/config.yml")
-
-folder_with_schemas <- fs::path("configs/schemas")
-FILE_SCHEME         <- fs::path(folder_with_schemas, "schema.xlsx")
+FILE_SCHEME <- fs::path("configs/schemas", "schema.xlsx")
+HEADER_TEXT <- sprintf("%s (%s)", Sys.getenv("FORM_TITLE", "NA"), Sys.getenv("FORM_VERSION", "NA"))
 
 box::purge_cache()
 box::use(
@@ -29,10 +27,12 @@ box::use(
   modules/data_validation
 )
 
-global_options$set_global_options()
+global_options$set_global_options(
+  shiny.host = "0.0.0.0"
+)
 
 # SETTINGS ================================
-AUTH_ENABLED <- config$auth_module
+AUTH_ENABLED <- Sys.getenv("FORM_AUTH_ENABLED", FALSE)
 
 # CHECK FOR PANDOC
 # TEMP ! NEED TO HANDLE
@@ -55,9 +55,7 @@ schm$get_id_type_list("allergo_anamnesis")
 # active
 schm$get_main_key_id
 schm$all_tables_names
-
-
-
+# ----------------------------
 
 # establish connection
 con <- db$make_db_connection()
@@ -91,17 +89,18 @@ nav_panels_list <- purrr::map(
 
 # UI =======================
 ui <- page_sidebar(
-  title = config$header,
+  title = HEADER_TEXT,
   theme = bs_theme(version = 5, preset = "bootstrap"),
   sidebar = sidebar(
     actionButton("add_new_main_key_button", "Добавить новую запись", icon("plus", lib = "font-awesome")),
     actionButton("save_data_button", "Сохранить данные", icon("floppy-disk", lib = "font-awesome")),
     actionButton("clean_data_button", "Очистить данные", icon("user-plus", lib = "font-awesome")),
+    actionButton("load_data_button", "Загрузить данные", icon("pencil", lib = "font-awesome")),
+    downloadButton("downloadDocx", "get .docx (test only)"),
     textOutput("status_message"),
     textOutput("status_message2"),
-    actionButton("load_data_button", "Загрузить данные", icon("pencil", lib = "font-awesome")),
+    textOutput("admin_buttons_panel"),
     downloadButton("downloadData", "Экспорт в .xlsx"),
-    downloadButton("downloadDocx", "get .docx (test only)"),
     actionButton("button_upload_data_from_xlsx", "импорт!"),
     position = "left",
     open = list(mobile = "always")
@@ -113,13 +112,36 @@ ui <- page_sidebar(
 # окно для подвтерждения очищения данных
 
 # init auth =======================
-if (AUTH_ENABLED) ui <- shinymanager::secure_app(ui, enable_admin = TRUE)
+if (AUTH_ENABLED) {
+  # shinymanager::set_labels("en", "Please authenticate" = "aboba")
+  ui <- ui |> 
+    shinymanager::secure_app(
+      status = "primary",
+      tags_top = tags$div(
+        tags$h3(HEADER_TEXT, style = "align:center"),
+        # tags$img(
+        #   src = "https://www.r-project.org/logo/Rlogo.png", width = 100
+        # )
+      ), 
+      tags_bottom = tags$div(
+        tags$p(
+          "For any question, please  contact ",
+          tags$a(
+            href = "mailto:someone@example.com?Subject=Shiny%20aManager",
+            target="_top", "administrator"
+          )
+        )
+      ),
+      enable_admin = TRUE,
+      language = "en"
+    )
+}
 
 # SERVER LOGIC =============================
 server <- function(input, output, session) {
   
   # AUTH SETUP ========================================
-  if (AUTH_ENABLED) {
+  res_auth <- if (AUTH_ENABLED) {
     # check_credentials directly on sqlite db
     res_auth <- shinymanager::secure_server(
       check_credentials = check_credentials(
@@ -128,9 +150,12 @@ server <- function(input, output, session) {
       ),
       keep_token = TRUE
     )
+  } else {
+    NULL
   }
 
-  output$auth_output <- renderPrint({
+  output$admin_buttons_panel <- renderPrint({
+    req(res_auth)
     reactiveValuesToList(res_auth)
   })
 
@@ -148,7 +173,7 @@ server <- function(input, output, session) {
   output$main_ui_navset <- renderUI({
 
     shiny::validate(
-      need(values$main_key, "⚠️ Необходимо указать id пациента!")
+      need(values$main_key, "Для начала работы нужно создать новую запись или загрузить существующую!")
     )
 
     # list of rendered panels
@@ -310,6 +335,7 @@ server <- function(input, output, session) {
     # выбираем все ключи из баз данных
     kyes_for_this_table <- db$get_nested_keys_from_table(values$nested_form_id, schm, values$main_key, con)
     kyes_for_this_table <- unique(c(values$nested_key, kyes_for_this_table))
+    kyes_for_this_table <- sort(kyes_for_this_table)
     values$nested_key <- if (length(kyes_for_this_table) == 0) NULL else kyes_for_this_table[[1]]
 
     # если ключ в формате даты - дать человекочитаемые данные
@@ -372,7 +398,7 @@ server <- function(input, output, session) {
 
     showModal(modalDialog(
       ui_for_inline_table,
-      footer = actionButton("nested_form_close_button", "Закрыть"),
+      footer = actionButton("close_modal_button", "Закрыть"),
       size = "l"
     ))
   }
@@ -465,10 +491,6 @@ server <- function(input, output, session) {
       con = con
     )
 
-  })
-
-  observeEvent(input$nested_form_close_button, {
-    removeModal()
   })
 
   ## сохранение данных из вложенной формы ---------------
@@ -672,7 +694,7 @@ server <- function(input, output, session) {
       "Данное действие очистит все заполненные данные. Убедитесь, что нужные данные сохранены.",
       title = "Очистить форму?",
       footer = tagList(
-        actionButton("cancel_button", "Отмена"),
+        actionButton("close_modal_button", "Отмена"),
         actionButton("clean_all_action", "Очистить.", class = "btn btn-danger")
       ),
       easyClose = TRUE
@@ -744,7 +766,7 @@ server <- function(input, output, session) {
         ui_load_menu,
         title = "Загрузить имеющиеся данные",
         footer = tagList(
-          actionButton("cancel_button", "Отмена", class = "btn btn-danger"),
+          actionButton("close_modal_button", "Отмена", class = "btn btn-danger"),
           actionButton("load_data", "Загрузить данные"),
         ),
         easyClose = TRUE
@@ -1054,7 +1076,7 @@ server <- function(input, output, session) {
   })
 
   ## cancel ==========================
-  observeEvent(input$cancel_button, {
+  observeEvent(input$close_modal_button, {
     removeModal()
   })
 
@@ -1075,7 +1097,13 @@ server <- function(input, output, session) {
   }
 
   ## LOGGING ACTIONS
-  log_action_to_db <- function(action, pat_id = as.character(NA), con) {
+  log_action_to_db <- function(
+    action = c("save"),
+    pat_id = as.character(NA),
+    con
+  ) {
+
+    action <- match.arg(action)
 
     action_row <- tibble(
       user = ifelse(AUTH_ENABLED, res_auth$user, "anonymous"),
@@ -1083,12 +1111,11 @@ server <- function(input, output, session) {
       id = pat_id,
       date = Sys.time()
     )
+    
     DBI::dbWriteTable(con, "log", action_row, append = TRUE)
   }
 }
 
-options(shiny.port = config$shiny_port)
-options(shiny.host = config$shiny_host)
 
 app <- shinyApp(ui = ui, server = server)
 
