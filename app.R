@@ -586,7 +586,7 @@ server <- function(input, output, session) {
     }
     
     values$nested_key <- input[[schm$get_key_id(values$nested_form_id)]]
-    utils$clean_forms(values$nested_id_and_types, NS(values$nested_form_id))
+    utils$clean_forms(values$nested_form_id, schm, NS(values$nested_form_id))
     removeModal()
     show_modal_for_nested_form(con)
 
@@ -646,10 +646,12 @@ server <- function(input, output, session) {
     con <- db$make_db_connection("confirm_create_new_main_key")
     on.exit(db$close_db_connection(con, "confirm_create_new_key"), add = TRUE)
 
+    new_main_key <- trimws(input[[schm$get_main_key_id]])
+
     existed_key <- db$get_keys_from_table("main", schm, con)
 
     # если введенный ключ уже есть в базе
-    if (input[[schm$get_main_key_id]] %in% existed_key) {
+    if (new_main_key %in% existed_key) {
       showNotification(
         sprintf("В базе уже запись с данным ключем."),
         type = "error"
@@ -657,8 +659,8 @@ server <- function(input, output, session) {
       return()
     }
     
-    values$main_key <- input[[schm$get_main_key_id]]
-    utils$clean_forms(schm$get_id_type_list("main"))
+    values$main_key <- new_main_key
+    utils$clean_forms("main", schm)
 
     removeModal()
   })
@@ -681,7 +683,7 @@ server <- function(input, output, session) {
   observeEvent(input$clean_all_action, {
     
     # rewrite all inputs with empty data
-    utils$clean_forms(schm$get_id_type_list("main"))
+    utils$clean_forms("main", schm)
     values$main_key <- NULL
 
     removeModal()

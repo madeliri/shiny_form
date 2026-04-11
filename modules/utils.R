@@ -318,10 +318,15 @@ update_forms_with_data <- function(
 }
 
 #' @export
-clean_forms <- function(id_and_types_list, ns) {
+clean_forms <- function(
+  table_name,
+  schm, 
+  ns
+) {
 
  # если передана ns() функция то подмеяем id для каждой формы в соответствии с пространством имен
   if (missing(ns)) ns <- NULL
+  id_and_types_list <- schm$get_id_type_list(table_name)
 
   purrr::walk2(
     .x = id_and_types_list,
@@ -333,6 +338,7 @@ clean_forms <- function(id_and_types_list, ns) {
         form_id   = x_id,
         form_type = x_type,
         value     = get_empty_data(x_type),
+        scheme = schm$get_schema(table_name),
         ns = ns
       )
     }
