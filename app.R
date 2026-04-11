@@ -812,7 +812,7 @@ server <- function(input, output, session) {
       # set date params
       options("openxlsx2.dateFormat" = "dd.mm.yyyy")
 
-      cli::cli_alert_success("DATA EXPORTED")
+      cli::cli_alert_success("База успешно экспортирована")
       showNotification("База успешно экспортирована", type = "message")
 
       log_action_to_db("export db", con = con)
@@ -996,11 +996,26 @@ server <- function(input, output, session) {
         filter(!form_type %in% c("description", "nested_forms"))
 
       date_columns <- subset(scheme, form_type == "date", form_id, drop = TRUE)
+      number_columns <- subset(scheme, form_type == "number", form_id, drop = TRUE)
+
+      # функция для преобразование числовых значений и сохранения "NA"
+      num_converter <- function(old_col) {
+        vec_with_na <- which(old_col == "NA")
+
+        # текстовые и числовые значения в текст: '24.0', '24,5' > '24', '24,5' (также обрезеаются десятичные значения где не нужно)
+        new_col <- suppressWarnings(as.character(as.double(gsub(",", "\\.", old_col))))
+
+        # значения где были явно указаны 'NA' остаются с текстом 'NA'
+        new_col[which(old_col == "NA")] <- "NA"
+
+        gsub("\\.", ",", new_col)
+      }
 
       df <- df |>
         dplyr::mutate(
           # даты - к единому формату
           dplyr::across(tidyselect::all_of({{date_columns}}), \(x) purrr::map_chr(x, db$excel_to_db_dates_converter)),
+          dplyr::across(tidyselect::all_of({{number_columns}}), num_converter),
         ) |>
         select(all_of(unique(c(main_key_id, scheme$form_id))))
 
@@ -1044,8 +1059,6 @@ server <- function(input, output, session) {
   # FUNCTIONS ==============================
   ## reading tables from db all ========
   read_df_from_db_all <- function(table_name, con) {
-    # DBI::dbConnect(RSQLite::SQLite(), dbfile)
-    # on.exit(DBI::dbDisconnect(con), add = TRUE)
 
     # check if this table exist
     if (table_name %in% dbListTables(con)) {
@@ -1061,8 +1074,6 @@ server <- function(input, output, session) {
 
   ## LOGGING ACTIONS
   log_action_to_db <- function(action, pat_id = as.character(NA), con) {
-    # DBI::dbConnect(RSQLite::SQLite(), dbfile)
-    # on.exit(DBI::dbDisconnect(con), add = TRUE)
 
     action_row <- tibble(
       user = ifelse(AUTH_ENABLED, res_auth$user, "anonymous"),

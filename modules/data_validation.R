@@ -93,7 +93,7 @@ init_val <- function(scheme, ns) {
           if (!all(compare_to_dict)) {
 
             text <- paste0("'",x[!compare_to_dict],"'", collapse = ", ")
-            glue::glue("Данные варианты, не соответствуют схеме: {text}")
+            glue::glue("варианты, не соответствующие схеме: {text}")
           }
         })
         

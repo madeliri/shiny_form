@@ -141,7 +141,6 @@ compare_existing_table_with_schema <- function(
           length(form_base_difference) == 0 &&
           length(base_form_difference) == 0) {
       cli::cli_warn("changes in scheme file detected: assuming order changed only")
-      print(all_ids_from_schema)
     }
 
     if (length(all_ids_from_schema) == length(colnames(df_to_rewrite)) &&
