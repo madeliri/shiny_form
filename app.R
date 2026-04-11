@@ -458,6 +458,7 @@ server <- function(input, output, session) {
         # colnames = dplyr::pull(col_types, form_id, form_label),
         extensions = c('KeyTable', "FixedColumns"),
         editable = 'cell',
+        selection = "none",
         options = list(
           dom = 'tip',
           scrollX = TRUE,
@@ -465,7 +466,7 @@ server <- function(input, output, session) {
           keys = TRUE
         )
       ) |>
-        DT::formatDate(date_cols, "toLocaleDateString")
+        DT::formatDate(date_cols, "toLocaleDateString", params = list('ru-RU'))
     )
 
     showModal(modalDialog(
