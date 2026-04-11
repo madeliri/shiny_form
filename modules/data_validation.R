@@ -44,6 +44,7 @@ init_val <- function(scheme, ns) {
           }
           # хак для пропуска значений
           if (x == "NA") return(NULL)
+
           # check for numeric
           # if (grepl("^[-]?(\\d*\\,\\d+|\\d+\\,\\d*|\\d+)$", x)) NULL else "Значение должно быть числом."
           if (grepl("^[+-]?\\d*[\\.|\\,]?\\d+$", x)) NULL else "Значение должно быть числом."
@@ -83,6 +84,21 @@ init_val <- function(scheme, ns) {
           }
         }
       }
+
+      if (form_type %in% c("select_multiple", "select_one")) {
+        iv$add_rule(x_input_id, function(x) {
+
+          # проверка на соответствие вариантов схеме ---------
+          compare_to_dict <- (x %in% choices)
+          if (!all(compare_to_dict)) {
+
+            text <- paste0("'",x[!compare_to_dict],"'", collapse = ", ")
+            glue::glue("Данные варианты, не соответствуют схеме: {text}")
+          }
+        })
+        
+      }
+
 
       # if in `required` column value is `1` apply standart validation
       if (!is.na(val_required) && val_required == 1) {

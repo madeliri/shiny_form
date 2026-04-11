@@ -165,10 +165,15 @@ server <- function(input, output, session) {
   # ==========================================
 
   ## перенос данных из датафрейма в форму -----------------------
-  load_data_to_form <- function(df, id_and_types_list, ns) {
+  load_data_to_form <- function(
+    df,
+    table_name = "main",
+    schm,
+    ns
+  ) {
 
-    input_types <- unname(id_and_types_list)
-    input_ids   <- names(id_and_types_list)
+    input_types <- unname(schm$get_id_type_list(table_name))
+    input_ids   <- names(schm$get_id_type_list(table_name))
     if (missing(ns)) ns <- NULL
 
     # transform df to list
@@ -186,6 +191,7 @@ server <- function(input, output, session) {
           form_id = x_id,
           form_type = x_type,
           value = df[[x_id]],
+          scheme = schm$get_schema(table_name),
           ns = ns
         )
       }
@@ -524,7 +530,8 @@ server <- function(input, output, session) {
       # загрузка данных в формы
       load_data_to_form(
         df                = df,
-        id_and_types_list = values$nested_id_and_types,
+        table_name = values$nested_form_id,
+        schm,
         ns                = NS(values$nested_form_id)
       )
     }
@@ -640,8 +647,7 @@ server <- function(input, output, session) {
     on.exit(db$close_db_connection(con, "confirm_create_new_key"), add = TRUE)
 
     existed_key <- db$get_keys_from_table("main", schm, con)
-    print(existed_key)
-    
+
     # если введенный ключ уже есть в базе
     if (input[[schm$get_main_key_id]] %in% existed_key) {
       showNotification(
@@ -760,7 +766,8 @@ server <- function(input, output, session) {
 
     load_data_to_form(
       df = df,
-      id_and_types_list = schm$get_id_type_list("main")
+      table_name = "main",
+      schm
     )
   
     values$main_key <- input$load_data_key_selector

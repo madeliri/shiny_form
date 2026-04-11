@@ -27,10 +27,11 @@ make_panels <- function(scheme) {
   )
 
   # make page wrap
-  page_wrap <- bslib::layout_column_wrap(
+  bslib::layout_column_wrap(
     # width = "350px", height = NULL, #was 800
     width = 1 / 4, height = NULL, # was 800
     fixed_width = TRUE,
+    heights_equal = "row",
     # unpack list of cards
     !!!cards
   )
@@ -235,9 +236,13 @@ update_forms_with_data <- function(
   form_id,
   form_type,
   value,
+  scheme,
   local_delimeter = getOption("SYMBOL_DELIM"),
   ns
 ) {
+
+  filterd_line <- scheme |>
+    dplyr::filter(form_id == {{form_id}})
 
   # если передана ns() функция то подмеяем id для каждой формы в соответствии с пространством имен
   if (!missing(ns) & !is.null(ns)) {
@@ -262,12 +267,13 @@ update_forms_with_data <- function(
   # select_one
   if (form_type == "select_one") {
     # update choices
-    # old_choices <- subset(scheme, form_id == form_id, choices) |> dplyr::pull()
-    # new_choices <- unique(c(old_choices, value))
-    # new_choices <- new_choices[!is.na(new_choices)]
+    old_choices <- filterd_line$choices
+    new_choices <- unique(c(old_choices, value))
+    new_choices <- new_choices[!is.na(new_choices)]
 
-    # shiny::updateSelectizeInput(inputId = form_id, selected = value, choices = new_choices)
-    shiny::updateSelectizeInput(inputId = form_id, selected = value)
+
+    shiny::updateSelectizeInput(inputId = form_id, selected = value, choices = new_choices)
+    # shiny::updateSelectizeInput(inputId = form_id, selected = value)
   }
 
   # select_multiple
@@ -276,12 +282,12 @@ update_forms_with_data <- function(
     vars <- stringr::str_split_1(value, local_delimeter)
 
     # update choices
-    # old_choices <- subset(scheme, form_id == form_id, choices) |> dplyr::pull()
-    # new_choices <- unique(c(old_choices, vars))
-    # new_choices <- new_choices[!is.na(new_choices)]
+    old_choices <- filterd_line$choices
+    new_choices <- unique(c(old_choices, vars))
+    new_choices <- new_choices[!is.na(new_choices)]
 
-    # shiny::updateSelectizeInput(inputId = form_id, selected = vars, choices = new_choices)
-    shiny::updateSelectizeInput(inputId = form_id, selected = vars)
+    shiny::updateSelectizeInput(inputId = form_id, selected = vars, choices = new_choices)
+    # shiny::updateSelectizeInput(inputId = form_id, selected = vars)
   }
 
   # in other case fill with `character(0)` to proper reseting form
@@ -316,7 +322,7 @@ clean_forms <- function(id_and_types_list, ns) {
 
  # если передана ns() функция то подмеяем id для каждой формы в соответствии с пространством имен
   if (missing(ns)) ns <- NULL
-    
+
   purrr::walk2(
     .x = id_and_types_list,
     .y = names(id_and_types_list),
