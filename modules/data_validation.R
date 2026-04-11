@@ -88,6 +88,10 @@ init_val <- function(scheme, ns) {
       if (form_type %in% c("select_multiple", "select_one")) {
         iv$add_rule(x_input_id, function(x) {
 
+          if (length(x) == 1) {
+            if (check_for_empty_data(x)) return(NULL)
+          }
+
           # проверка на соответствие вариантов схеме ---------
           compare_to_dict <- (x %in% choices)
           if (!all(compare_to_dict)) {
@@ -96,7 +100,7 @@ init_val <- function(scheme, ns) {
             glue::glue("варианты, не соответствующие схеме: {text}")
           }
         })
-        
+
       }
 
 
