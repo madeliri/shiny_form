@@ -99,9 +99,8 @@ ui <- page_sidebar(
     downloadButton("downloadDocx", "get .docx (test only)"),
     textOutput("status_message"),
     textOutput("status_message2"),
-    textOutput("admin_buttons_panel"),
-    downloadButton("downloadData", "Экспорт в .xlsx"),
-    actionButton("button_upload_data_from_xlsx", "импорт!"),
+    uiOutput("admin_buttons_panel"),
+    uiOutput("display_log"),
     position = "left",
     open = list(mobile = "always")
   ),
@@ -143,7 +142,7 @@ server <- function(input, output, session) {
   # AUTH SETUP ========================================
   res_auth <- if (AUTH_ENABLED) {
     # check_credentials directly on sqlite db
-    res_auth <- shinymanager::secure_server(
+    shinymanager::secure_server(
       check_credentials = check_credentials(
         db = "auth.sqlite",
         passphrase = Sys.getenv("AUTH_DB_KEY")
@@ -154,9 +153,27 @@ server <- function(input, output, session) {
     NULL
   }
 
-  output$admin_buttons_panel <- renderPrint({
-    req(res_auth)
-    reactiveValuesToList(res_auth)
+  output$admin_buttons_panel <- renderUI({
+
+    showing_buttons <- TRUE
+
+    if (AUTH_ENABLED) {
+      reactiveValuesToList(res_auth)
+      if (res_auth$admin) {
+        print("admin")
+      } else {
+        print("not_admin")
+        showing_buttons <- FALSE
+      }
+    }
+
+    if (showing_buttons) {
+      fluidRow(
+        downloadButton("downloadData", "Экспорт в .xlsx"),
+        p(""), # separate buttons
+        actionButton("button_upload_data_from_xlsx", "импорт!", icon("file-import", lib = "font-awesome"))
+      )
+    }
   })
 
   # REACTIVE VALUES =================================
@@ -165,9 +182,14 @@ server <- function(input, output, session) {
     data     = NULL,
     main_key = NULL,
     nested_key = NULL,
-    nested_form_id = NULL,
-    nested_id_and_types = NULL
+    nested_form_id = NULL
   )
+
+  # VALIDATIONS ============================
+  # create new validator
+  # TODO: как осуществить инициализацию валидатора после
+  iv_main <- data_validation$init_val(schm$get_schema("main"))
+  iv_main$enable()
 
   # динамический рендеринг --------------------------
   output$main_ui_navset <- renderUI({
@@ -284,7 +306,7 @@ server <- function(input, output, session) {
     }
 
     # если данных нет - просто записать данные
-    log_action_to_db("save", values$main_key, con)
+    log_action_to_db("saving data", values$main_key, con)
 
     db$write_df_to_db(
       df = exported_df,
@@ -326,7 +348,6 @@ server <- function(input, output, session) {
 
     # загрузка схемы для данной вложенной формы
     this_nested_form_scheme <-  schm$get_schema(values$nested_form_id)
-    values$nested_id_and_types <- schm$get_id_type_list(values$nested_form_id)
 
     # мини-схема для ключа
     this_nested_form_key_scheme <- subset(this_nested_form_scheme, form_id == key_id)
@@ -491,6 +512,8 @@ server <- function(input, output, session) {
       con = con
     )
 
+    log_action_to_db("saving data (gt)", values$main_key, con)
+
   })
 
   ## сохранение данных из вложенной формы ---------------
@@ -510,10 +533,12 @@ server <- function(input, output, session) {
     # сохраняем данные текущей вложенной таблицы
     save_inputs_to_db(
       table_name        = values$nested_form_id,
-      id_and_types_list = values$nested_id_and_types,
+      id_and_types_list = schm$get_id_type_list(values$nested_form_id),
       ns                = NS(values$nested_form_id),
       con = con
     )
+
+    log_action_to_db("saving data", values$main_key, con)
 
     showNotification(
       "Данные успешно сохраннены",
@@ -614,11 +639,6 @@ server <- function(input, output, session) {
 
   })
 
-  # VALIDATIONS ============================
-  # create new validator
-  iv_main <- data_validation$init_val(schm$get_schema("main"))
-  iv_main$enable()
-
   # STATUSES ===============================
   # вывести отображение что что-то не так
   output$status_message <- renderText({
@@ -682,6 +702,7 @@ server <- function(input, output, session) {
     }
     
     values$main_key <- new_main_key
+    log_action_to_db("creating new key", values$main_key, con)
     utils$clean_forms("main", schm)
 
     removeModal()
@@ -725,6 +746,7 @@ server <- function(input, output, session) {
       con = con
     )
 
+    log_action_to_db("saving data", values$main_key, con = con)
     showNotification(
       "Данные успешно сохранены",
       type = "message"
@@ -793,9 +815,9 @@ server <- function(input, output, session) {
       table_name = "main",
       schm
     )
-  
+    
     values$main_key <- input$load_data_key_selector
-
+    log_action_to_db("loading data", values$main_key, con = con)
     removeModal()
 
   })
@@ -838,8 +860,7 @@ server <- function(input, output, session) {
 
       cli::cli_alert_success("База успешно экспортирована")
       showNotification("База успешно экспортирована", type = "message")
-
-      log_action_to_db("export db", con = con)
+      log_action_to_db("exporting data to xlsx", con = con)
 
       # pass tables to export
       openxlsx2::write_xlsx(
@@ -961,9 +982,10 @@ server <- function(input, output, session) {
       ),
       checkboxInput("upload_data_from_xlsx_owerwrite_all_data", "перезаписать все данные", width = 450),
       footer = tagList(
+        modalButton("Отмена"),
         actionButton("button_upload_data_from_xlsx_confirm", "Добавить")
       ),
-      easyClose = TRUE
+      easyClose = FALSE
     ))
 
   })
@@ -1072,6 +1094,7 @@ server <- function(input, output, session) {
       )
       cli::cli_alert_success(message)
     }
+    log_action_to_db("importing data from xlsx", con = con)
     removeModal()
   })
 
@@ -1098,22 +1121,83 @@ server <- function(input, output, session) {
 
   ## LOGGING ACTIONS
   log_action_to_db <- function(
-    action = c("save"),
-    pat_id = as.character(NA),
+    action = c(
+      "saving data",
+      "saving data (gt)",
+      "loading data",
+      "creating new key",
+      "exporting data to xlsx",
+      "importing data from xlsx"
+    ),
+    key = NULL,
     con
   ) {
 
     action <- match.arg(action)
 
     action_row <- tibble(
-      user = ifelse(AUTH_ENABLED, res_auth$user, "anonymous"),
-      action = action,
-      id = pat_id,
-      date = Sys.time()
+      date        = Sys.time(),
+      user        = ifelse(AUTH_ENABLED, res_auth$user, "anonymous"),
+      remote_addr = session$request$REMOTE_ADDR,
+      key         = key,
+      action      = action,
     )
-    
+
     DBI::dbWriteTable(con, "log", action_row, append = TRUE)
   }
+
+  # КРАТКАЯ СВОДКА ПРО ЛОГГИНГ ------------------
+  observe({
+
+    output$display_log <- renderUI({
+
+      con <- db$make_db_connection("display_log")
+      on.exit(db$close_db_connection(con, "display_log"), add = TRUE)
+
+      query <- if (!is.null(values$main_key)) {
+        sprintf("SELECT * FROM log WHERE key = '%s'", values$main_key)
+      } else {
+        "SELECT * FROM log"
+      }
+
+      log_rows <- DBI::dbGetQuery(con, query)
+
+      if (nrow(log_rows) > 0) {
+
+        lines <- log_rows |>
+          mutate(date = as.POSIXct(date)) |>
+          mutate(
+            # date = date + lubridate::hours(3), # fix datetime
+            date_day = as.Date(date)
+          ) |>
+          mutate(cons_actions = dplyr::consecutive_id(action, user)) |>
+          mutate(n_actions = row_number(), .by = c(cons_actions, user, action, date_day)) |>
+          slice(which.max(n_actions), .by = c(user, action, date_day)) |>
+          mutate(string_to_print = sprintf(
+            "<b>[%s %s]</b>: %s - %s (%s)",
+            format(date, "%d.%m.%y"),
+            format(date, "%H:%M"),
+            user,
+            action,
+            n_actions
+          )) |>
+          pull(string_to_print) |>
+          paste(collapse = "</br>")
+
+      } else {
+        lines <- ""
+      }
+
+      tagList(
+        paste0("ID: ", values$main_key),
+        br(),
+        p(
+          HTML(lines),
+          style = "font-size:10px;"
+        )
+      )
+    })
+  })
 }
 
 
