@@ -106,12 +106,7 @@ ui <- page_sidebar(
     position = "left",
     open = list(mobile = "always")
   ),
-  # list of rendered panels
-  navset_card_underline(
-    id = "main",
-    !!!nav_panels_list,
-    header = NULL
-  )
+  as_fill_carrier(uiOutput("main_ui_navset"))
 )
 
 # MODALS ========================
@@ -131,6 +126,7 @@ if (AUTH_ENABLED) ui <- shinymanager::secure_app(ui, enable_admin = TRUE)
 
 # SERVER LOGIC =============================
 server <- function(input, output, session) {
+  
   # AUTH SETUP ========================================
   if (AUTH_ENABLED) {
     # check_credentials directly on sqlite db
@@ -157,14 +153,21 @@ server <- function(input, output, session) {
     nested_id_and_types = NULL
   )
 
-  # showModal(modalDialog(
-  #   title = "Добро пожаловать",
-  #   "что будем делать?",
-  #   footer = tagList(
-  #     actionButton("add_new_main_key_button", "добавить"),
-  #     actionButton("load_data_button", "загрузить")
-  #   )
-  # ))
+  # динамический рендеринг --------------------------
+  output$main_ui_navset <- renderUI({
+
+    shiny::validate(
+      need(values$main_key, "⚠️ Необходимо указать id пациента!")
+    )
+
+    # list of rendered panels
+    navset_card_underline(
+      id = "main",
+      !!!nav_panels_list,
+      header = NULL,
+      height = NULL
+    )
+  })
 
   # ==========================================
   # ОБЩИЕ ФУНКЦИИ ============================
@@ -359,7 +362,8 @@ server <- function(input, output, session) {
         ),
         actionButton("add_new_nested_key_button", "add"),
         actionButton("nested_form_save_button", "save"),
-        actionButton("nested_form_dt_button", "dt")
+        actionButton("nested_form_dt_button", "dt"),
+        open = list(mobile = "always-above")
       ),
       # if (!is.null(values$nested_key)) {rlang::syms(!!!yay_its_fun)} else bslib::nav_panel("empty")
       !!!yay_its_fun
@@ -441,6 +445,7 @@ server <- function(input, output, session) {
     con <- db$make_db_connection("nested_form_save_button")
     on.exit(db$close_db_connection(con, "nested_form_save_button"), add = TRUE)
 
+    removeModal()
     show_modal_for_nested_form_dt(con)
   })
 
@@ -909,7 +914,7 @@ server <- function(input, output, session) {
     }
   )
 
-  ## upload xlsx to df ----------------------
+  ## import data from xlsx ----------------------
   observeEvent(input$button_upload_data_from_xlsx, {
 
     showModal(modalDialog(
